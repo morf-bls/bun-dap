@@ -162,6 +162,30 @@ test('e2e: launch hello.ts, breakpoint, stack, scopes, variables, evaluate, cont
 // and freezes the VM with a one-shot pre-gate Debugger.pause so the mapped
 // arm always lands before the module body runs; if the bp's target IS that
 // first executed statement, the brake's pause stands in for the hit.
+test('e2e: stackTrace without levels returns all frames (nvim-dap omits it)', async () => {
+  const client = connectStdio();
+  try {
+    await launchReady(client, hello);
+    await armBreakpoint(client, hello, 2);
+    await client.waitForEvent('stopped');
+    // DAP: a missing `levels` means "return all frames". nvim-dap omits it
+    // (VS Code pages explicitly); a session-layer `?? 0` default once made
+    // this return zero frames with totalFrames > 0, which nvim renders as
+    // "stopped at unavailable location".
+    const st = await client.send('stackTrace', { threadId: 1, startFrame: 0 });
+    const body = castObject(st.body);
+    const frames = body.stackFrames as Array<Record<string, unknown>>;
+    expect(frames.length).toBeGreaterThan(0);
+    expect(frames.length).toBe(body.totalFrames);
+    expect(frames[0]?.line).toBe(2);
+    const cont = await client.send('continue', { threadId: 1 });
+    expect(cont.success).toBe(true);
+    await client.waitForEvent('exited');
+  } finally {
+    client.close();
+  }
+}, 30_000);
+
 test('e2e: deferred breakpoint behind a comment header re-arms onto the requested TS line', async () => {
   const client = connectStdio();
   try {

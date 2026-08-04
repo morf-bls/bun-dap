@@ -214,7 +214,12 @@ export class BunDapSession extends LoggingDebugSession {
       response.body = await this.getAdapter().stackTrace({
         threadId: args.threadId,
         startFrame: args.startFrame ?? 0,
-        levels: args.levels ?? 0,
+        // DAP: a missing levels means "all frames" — pass undefined through
+        // so the adapter's default (every frame) applies. `?? 0` here made
+        // nvim-dap (which omits levels) receive an empty stackFrames array
+        // with totalFrames > 0, rendered as "stopped at unavailable
+        // location".
+        levels: args.levels,
       });
       this.sendResponse(response);
     } catch (err) {

@@ -1061,9 +1061,10 @@ export class BunDebugAdapter {
     return [{ id: 1, name: 'main' }];
   }
 
-  async stackTrace(args: { threadId: number; startFrame: number; levels: number }): Promise<{ stackFrames: DebugProtocol.StackFrame[]; totalFrames: number }> {
+  async stackTrace(args: { threadId: number; startFrame: number; levels?: number }): Promise<{ stackFrames: DebugProtocol.StackFrame[]; totalFrames: number }> {
     if (!this.paused || this.currentCallFrames.length === 0) return { stackFrames: [], totalFrames: 0 };
     const start = args.startFrame ?? 0;
+    // DAP: missing levels = all frames (nvim-dap omits it; VS Code pages).
     const levels = args.levels ?? this.currentCallFrames.length;
     const stackFrames: DebugProtocol.StackFrame[] = [];
     for (let i = start; i < start + levels && i < this.currentCallFrames.length; i++) {
