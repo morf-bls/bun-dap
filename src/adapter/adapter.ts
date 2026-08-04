@@ -121,11 +121,15 @@ export class BunDebugAdapter {
   private firstPausePending = false;
   /**
    * True between a next/stepIn/stepOut request and the pause that completes
-   * it. JSC reports step completion as reason PauseOnNextStatement —
-   * indistinguishable from a Debugger.pause brake on the wire — so
-   * mapStopReason consults this flag to report 'step' (upstream tracks the
-   * pending step the same way). Survives bp hits mid-step: those map to
-   * 'breakpoint' without consuming the flag.
+   * it. JSC reports step completion as reason PauseOnNextStatement (or
+   * 'other' when stepping from a bp pause) — indistinguishable from a
+   * Debugger.pause brake on the wire — so mapStopReason consults this flag
+   * to report 'step' (upstream tracks the pending step the same way).
+   * Cleared by every resume path (client continue, brake/placeholder/
+   * logpoint/condition swallows): a bp-family hit mid-step cancels JSC's
+   * step mode, so no completion pause follows and the flag must not strand.
+   * A bp hit reported to the client (reason 'breakpoint') leaves the flag
+   * for the subsequent continue, which clears it in resume().
    */
   private stepPending = false;
   private paused = false;
@@ -387,6 +391,11 @@ export class BunDebugAdapter {
   }
   /** Debugger control — valid while paused (resume/step) or running (pause). */
   async resume(): Promise<void> {
+    // Client continue abandons any in-flight step (bp hits mid-step cancel
+    // JSC's step mode — probe-verified), so the flag must not strand and
+    // mislabel a later manual pause as 'step'. resumeInternal clears it for
+    // the swallow paths for the same reason.
+    this.stepPending = false;
     await this.inspector?.send('Debugger.resume');
   }
 
@@ -396,17 +405,34 @@ export class BunDebugAdapter {
     // reason as a Debugger.pause brake — so mapStopReason needs this flag to
     // tell them apart. nvim-dap only re-renders the cursor on reason 'step'.
     this.stepPending = true;
-    await this.inspector?.send('Debugger.stepNext');
+    try {
+      await this.inspector?.send('Debugger.stepNext');
+    } catch (err) {
+      // No completion pause is coming — clear the flag so a later manual
+      // pause isn't mislabeled 'step'.
+      this.stepPending = false;
+      throw err;
+    }
   }
 
   async stepIn(): Promise<void> {
     this.stepPending = true;
-    await this.inspector?.send('Debugger.stepInto');
+    try {
+      await this.inspector?.send('Debugger.stepInto');
+    } catch (err) {
+      this.stepPending = false;
+      throw err;
+    }
   }
 
   async stepOut(): Promise<void> {
     this.stepPending = true;
-    await this.inspector?.send('Debugger.stepOut');
+    try {
+      await this.inspector?.send('Debugger.stepOut');
+    } catch (err) {
+      this.stepPending = false;
+      throw err;
+    }
   }
 
   async pause(): Promise<void> {
@@ -1073,6 +1099,14 @@ export class BunDebugAdapter {
   }
 
   private async resumeInternal(): Promise<void> {
+    // Swallow resumes (brake/placeholder/logpoint/condition-gating) cancel
+    // any in-flight step just like a client continue: every swallow path is
+    // reached from a bp-family pause (or the brake), and probe-verified JSC
+    // behavior is that a bp hit mid-step cancels the step — no completion
+    // pause follows. Keeping the flag would strand it and mislabel a later
+    // manual pause as 'step' (logstep probe: stepping over a logpoint line
+    // printed the log and ran free, step absorbed).
+    this.stepPending = false;
     await this.requireInspector().send('Debugger.resume');
   }
 

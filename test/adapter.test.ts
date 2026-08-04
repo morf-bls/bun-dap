@@ -176,7 +176,7 @@ test('e2e: stackTrace without levels returns all frames (nvim-dap omits it)', as
     const body = castObject(st.body);
     const frames = body.stackFrames as Array<Record<string, unknown>>;
     expect(frames.length).toBeGreaterThan(0);
-    expect(frames.length).toBe(body.totalFrames);
+    expect(frames.length).toBe(body.totalFrames as number);
     expect(frames[0]?.line).toBe(2);
     const cont = await client.send('continue', { threadId: 1 });
     expect(cont.success).toBe(true);
