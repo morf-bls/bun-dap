@@ -78,6 +78,23 @@ interface FunctionBreakpoint {
   hitCount: number;
 }
 
+/**
+ * A line-0 placeholder breakpoint for one not-yet-parsed source (upstream bun
+ * design, `#setBreakpointsByUrl`): JSC resolves it to that source's first
+ * pausable statement and pauses execution there — a module-scoped engine brake
+ * that holds the module body until the mapped arms bind. Kept by jsc id until
+ * the source parses; ids linger in placeholderJscIds after teardown so
+ * in-flight placeholder pauses still get swallowed.
+ */
+interface PlaceholderRecord {
+  /** JSC id of the armed placeholder breakpoint. */
+  jscId: string;
+  /** Canonical (realpath'd) source path the placeholder was armed against. */
+  path: string;
+  /** DAP bp keys (lineBreakpoints) waiting on this source, in request order. */
+  bpKeys: string[];
+}
+
 const URL_RE = /ws:\/\/[\w.-]+:\d+\/[^\s]+/;
 
 // ---------------------------------------------------------------------------
@@ -125,6 +142,24 @@ export class BunDebugAdapter {
    * decoded map) shows up in onScriptParsed.
    */
   private pendingByPath = new Map<string, string[]>();
+  /**
+   * Per-source line-0 placeholder breakpoints for deferred sources — the
+   * upstream bun design (`#setBreakpointsByUrl`): JSC resolves a placeholder
+   * to its source's first pausable statement and pauses execution THERE,
+   * giving the module's own deferred arms time to bind. The global brake
+   * covers import-free entries (first executed statement == entry statement);
+   * the placeholder covers entries with imports, where the first executed
+   * statement lives in a builtin initializer and the brake is consumed too
+   * early. Keyed by jsc breakpoint id.
+   */
+  private placeholdersById = new Map<string, PlaceholderRecord>();
+  /** Every placeholder id ever armed; permanent, so late pauses are swallowed. */
+  private placeholderJscIds = new Set<string>();
+  /**
+   * Placeholder id -> DAP bp key when the placeholder's resolved location IS
+   * that bp's mapped target (the pause stands in for the hit). One-shot.
+   */
+  private placeholderAlias = new Map<string, string>();
   /**
    * True between configurationDone arming the one-shot entry brake (a
    * pre-gate `Debugger.pause`, legal and deterministic per probe) and its
@@ -179,7 +214,10 @@ export class BunDebugAdapter {
     // gate (verified by probe), and stopOnEntry is implemented as a deferred
     // line-0 breakpoint armed at configurationDone.
     const inspectFlag = `--inspect-wait=127.0.0.1:${port}`;
-    this.entryBreakpointUrl = this.stopOnEntry ? program : null;
+    // Canonicalize like setBreakpoints does: Bun reports script URLs with
+    // symlinks resolved, so the entry bp URL must match (and the brake's
+    // inEntryFile guard compares against it).
+    this.entryBreakpointUrl = this.stopOnEntry ? (existsSync(program) ? realpathSync(program) : program) : null;
     const child = spawn(runtime, [...runtimeArgs, inspectFlag, program, ...(args.args ?? [])], {
       cwd,
       env,
@@ -395,11 +433,25 @@ export class BunDebugAdapter {
       // JSC resolves it to the first executable statement once the module
       // parses (the same mechanism the original placeholder design used).
       if (this.stopOnEntry && this.entryBreakpointUrl) {
-        try {
-          const res = await inspector.send('Debugger.setBreakpointByUrl', { url: this.entryBreakpointUrl, lineNumber: 0 });
-          this.entryBreakpointId = res.breakpointId;
-        } catch (err) {
-          this.diagnostic(`entry breakpoint failed: ${(err as Error).message}`);
+        // A deferred-bp placeholder for the entry file is already armed at
+        // its line 0 (Path B ran before configurationDone — the common
+        // stopOnEntry+breakpoint flow): JSC rejects a second bp at the same
+        // location ("Breakpoint for given location already exists"), so the
+        // placeholder doubles as the entry bp. Its pause still owes the
+        // 'entry' stop — onPaused's placeholder branch falls through for it.
+        let existing: string | undefined;
+        for (const [pid, record] of this.placeholdersById) {
+          if (record.path === this.entryBreakpointUrl) { existing = pid; break; }
+        }
+        if (existing !== undefined) {
+          this.entryBreakpointId = existing;
+        } else {
+          try {
+            const res = await inspector.send('Debugger.setBreakpointByUrl', { url: this.entryBreakpointUrl, lineNumber: 0 });
+            this.entryBreakpointId = res.breakpointId;
+          } catch (err) {
+            this.diagnostic(`entry breakpoint failed: ${(err as Error).message}`);
+          }
         }
       }
       // Deferred-breakpoint brake: one pre-gate Debugger.pause so the VM
@@ -407,10 +459,13 @@ export class BunDebugAdapter {
       // legal while gated; arrives as reason PauseOnNextStatement with no
       // data). Deferred bps arm at their mapped coordinates while frozen
       // (see onScriptParsed); without the brake a bp whose target runs within
-      // microseconds of parse end would bind too late. The pause is consumed
-      // — swallowed or surfaced as a bp's stop — in onPaused. Skipped when
-      // nothing is deferred, and launch-only: attach mode has no gate.
-      if (this.mode === 'launch' && this.pendingByPath.size > 0) {
+      // microseconds of parse end would bind too late — the attach-mode
+      // failure the nvim log showed (bp verified:true, no stop, program ran
+      // to completion). The pause is consumed — swallowed or surfaced as a
+      // bp's stop — in onPaused. Skipped when nothing is deferred. Applies to
+      // attach too: pendingByPath non-empty at configurationDone implies the
+      // --inspect-wait gate still holds, so the same pre-gate pause is safe.
+      if (this.pendingByPath.size > 0) {
         try {
           await inspector.send('Debugger.pause');
           this.brakePending = true;
@@ -474,6 +529,51 @@ export class BunDebugAdapter {
   }
 
   private onBreakpointResolved(params: BreakpointResolvedEvent): void {
+    // Placeholder resolved: the source is loaded. If a pending bp's mapped
+    // location IS the placeholder's resolved statement, the placeholder's
+    // upcoming pause stands in for that bp's hit (a bp bound at the pause
+    // location cannot re-fire once resumed); record the alias and keep the
+    // placeholder armed — its pause IS the hit (it shares coordinates with
+    // the real bp, so removing it would disarm both). Non-aliased
+    // placeholders are removed below so later passes hit normally.
+    const record = this.placeholdersById.get(params.breakpointId);
+    if (record) {
+      this.placeholdersById.delete(record.jscId);
+      const entry = this.sources.get(record.path);
+      const map = entry?.sourceMap ?? null;
+      let aliased = false;
+      if (map) {
+        for (const key of record.bpKeys) {
+          const bp = this.lineBreakpoints.get(key);
+          if (!bp) continue;
+          const gen = map.generatedLocation(bp.line, 0);
+          if (gen === null || gen.line - 1 !== params.location.lineNumber) continue;
+          if (map instanceof SourceMap && gen.column - 1 !== params.location.columnNumber) continue;
+          this.placeholderAlias.set(record.jscId, key);
+          if (!bp.verified) {
+            bp.verified = true;
+            this.host?.sendBreakpointChanged({ id: bp.id, line: bp.line, verified: true });
+          }
+          aliased = true;
+          break;
+        }
+      }
+      // Only remove the placeholder when it is NOT standing in for a bp: it
+      // shares coordinates with the aliased bp, so removing it would disarm
+      // the real breakpoint too. When aliased, the placeholder's pause IS the
+      // hit and is disarmed when that pause is consumed in onPaused. The id
+      // stays in placeholderJscIds either way (late pauses get swallowed).
+      // Also skip the removal while the placeholder doubles as the entry bp
+      // (configurationDone reuses it when Path B already occupies the entry
+      // file's line 0): the entry stop has not happened yet — the body is
+      // frozen by the brake, so this resolution raced ahead of execution and
+      // removing now would disarm the entry bp before its pause. The entry
+      // stop's disarm block in onPaused removes it instead.
+      if (!aliased && record.jscId !== this.entryBreakpointId) {
+        this.requireInspector().send('Debugger.removeBreakpoint', { breakpointId: record.jscId }).catch(() => {});
+      }
+      return;
+    }
     const key = this.jscToDapKey.get(params.breakpointId);
     if (!key) return;
     const bp = this.lineBreakpoints.get(key);
@@ -482,7 +582,6 @@ export class BunDebugAdapter {
       this.host?.sendBreakpointChanged({ id: bp.id, line: bp.line, verified: true });
     }
   }
-
   /**
    * Arm one line breakpoint against JSC at its source-mapped generated
    * coordinates. JSC resolves URL-keyed breakpoints against GENERATED
@@ -543,8 +642,14 @@ export class BunDebugAdapter {
     }
 
     // Remove previously armed breakpoints for this source (full replacement),
-    // including any not-yet-armed deferred requests for it.
+    // including any not-yet-armed deferred requests and their placeholder.
     this.pendingByPath.delete(absPath);
+    for (const [pid, record] of [...this.placeholdersById]) {
+      if (record.path !== absPath) continue;
+      this.placeholdersById.delete(pid);
+      // id stays in placeholderJscIds: late placeholder pauses get swallowed.
+      this.requireInspector().send('Debugger.removeBreakpoint', { breakpointId: pid }).catch(() => {});
+    }
     for (const [key, bp] of [...this.lineBreakpoints]) {
       if (bp.path !== absPath) continue;
       this.lineBreakpoints.delete(key);
@@ -587,14 +692,49 @@ export class BunDebugAdapter {
       } else {
         // The script is not parsed yet (the normal launch flow — setBreakpoints
         // arrives while the --inspect-wait gate holds parsing). Defer: the bp
-        // arms at mapped coordinates from onScriptParsed, which always follows
-        // (a Path B state only exists when that event has not been delivered
-        // yet), and configurationDone's pre-gate brake freezes the entry
-        // module's body until that happened. Verified flips true via a
-        // breakpoint changed event once the arm lands.
+        // arms at mapped coordinates from onScriptParsed. Register the pending
+        // key SYNCHRONOUSLY, before the placeholder RPC below awaits — the
+        // gate may already be open, in which case the scriptParsed event can
+        // be processed while this call is in flight; if pending were set only
+        // after the await, onScriptParsed would see an empty registry and the
+        // bp would never arm.
         let keys = this.pendingByPath.get(absPath);
         if (!keys) this.pendingByPath.set(absPath, (keys = []));
         keys.push(key);
+
+        // Arm a line-0 placeholder for the source — upstream's design — as a
+        // module-scoped engine brake: JSC pauses at the source's first
+        // pausable statement when it executes, holding the module body until
+        // the mapped arms bind. Without it, a program with imports runs its
+        // whole synchronous body (self-tests, setup) before the arm RPC is
+        // processed, and the breakpoint verifies only after it never fires.
+        let record: PlaceholderRecord | undefined;
+        for (const candidate of this.placeholdersById.values()) {
+          if (candidate.path === absPath) {
+            record = candidate;
+            break;
+          }
+        }
+        if (!record) {
+          try {
+            const result = await this.requireInspector().send('Debugger.setBreakpointByUrl', {
+              url: absPath,
+              lineNumber: 0,
+            });
+            record = { jscId: result.breakpointId, path: absPath, bpKeys: [] };
+            this.placeholdersById.set(result.breakpointId, record);
+            this.placeholderJscIds.add(result.breakpointId);
+          } catch (err) {
+            bp.message = (err as Error).message;
+          }
+        }
+        if (record) {
+          record.bpKeys.push(key);
+        } else {
+          // Placeholder arm failed: without the brake the body may run past
+          // the bp, but the pending registration above still lets
+          // onScriptParsed arm it — best effort.
+        }
       }
       out.push({ id: bp.id, verified: bp.verified, line: bp.line, message: bp.message });
     }
@@ -686,30 +826,67 @@ export class BunDebugAdapter {
       if (typeof data.breakpointId === 'string') hitIds.push(data.breakpointId);
     }
     // Entry brake (configurationDone sent a pre-gate Debugger.pause because
-    // deferred breakpoints were pending): the VM froze at the module body's
-    // first executed statement, with deferred bps armed meanwhile (their
-    // scriptParsed was processed first on the socket). If a bp targets THIS
-    // statement, the pause is that bp's hit — a bp bound at the pause
-    // location does not re-fire once resumed — so its keys join the normal
-    // gating below and the stop reports as 'breakpoint'. Otherwise the brake
-    // is internal machinery: resume silently — UNLESS stopOnEntry is still
-    // owed: the entry bp and the brake resolve to the same statement whenever
-    // the file's first pausable statement is its first executed one, so the
-    // pause must fall through and surface as the 'entry' stop (which also
-    // runs the entry-bp disarm below).
+    // deferred breakpoints were pending): the VM froze at the FIRST executed
+    // statement of the whole process, with deferred bps armed meanwhile. If a
+    // bp targets THIS statement, the pause is that bp's hit — a bp bound at
+    // the pause location does not re-fire once resumed — so its keys join the
+    // normal gating below and the stop reports as 'breakpoint'. Otherwise the
+    // brake is internal machinery: resume silently — unless stopOnEntry is
+    // still owed AND the pause is inside the entry file (when the process has
+    // imports, the first executed statement lives in a builtin initializer
+    // like node:path — a pause there has no user source and clients show
+    // "stopped at unavailable location"; the entry stop then comes from the
+    // entry bp).
     let brakeKeys: string[] = [];
     if (this.brakePending) {
       this.brakePending = false;
       brakeKeys = this.brakeOverlapKeys();
-      if (brakeKeys.length === 0 && !this.firstPausePending) {
+      const topFrame = this.currentCallFrames[0];
+      const topEntry = topFrame?.location ? this.sourcesByScriptId.get(topFrame.location.scriptId) : undefined;
+      const inEntryFile = topEntry !== undefined && topEntry.path === this.entryBreakpointUrl;
+      if (brakeKeys.length === 0 && (!this.firstPausePending || !inEntryFile)) {
         await this.resumeInternal();
         return;
+      }
+    }
+    // Placeholder pauses (per-source line-0 brake, see setBreakpoints Path B):
+    // the source's first pausable statement executed. If the placeholder was
+    // aliased to a bp (its resolved location IS that bp's target), the pause
+    // is that bp's hit — join the normal gating below. Otherwise it is
+    // internal machinery: swallow it (the mapped arms already bound at
+    // onScriptParsed, so execution resumes into them) — UNLESS stopOnEntry
+    // is still owed and the pause is in the entry file: the entry bp and the
+    // placeholder are both armed at line 0 of the same source and resolve to
+    // the same statement, so JSC reports a single pause carrying whichever
+    // id it picked. When that id is the placeholder's, swallowing here would
+    // eat the entry stop; fall through so it surfaces as 'entry' (the
+    // entry-bp disarm below also runs, once).
+    let hitKeysAlias: string[] = [];
+    const pauseId = typeof data?.breakpointId === 'string' ? data.breakpointId : undefined;
+    if (pauseId !== undefined && this.placeholderJscIds.has(pauseId)) {
+      const aliasKey = this.placeholderAlias.get(pauseId);
+      if (aliasKey !== undefined) {
+        this.placeholderAlias.delete(pauseId);
+        // Disarm the placeholder now that its hit has been consumed — later
+        // passes of this statement must hit only the real bp. Racy by design;
+        // the id stays in placeholderJscIds so a queued late pause swallows.
+        this.requireInspector().send('Debugger.removeBreakpoint', { breakpointId: pauseId }).catch(() => {});
+        hitKeysAlias = [aliasKey];
+      } else {
+        const top = this.currentCallFrames[0];
+        const topSource = top?.location ? this.sourcesByScriptId.get(top.location.scriptId) : undefined;
+        const entryOwedHere = this.firstPausePending && topSource !== undefined && topSource.path === this.entryBreakpointUrl;
+        if (!entryOwedHere) {
+          await this.resumeInternal();
+          return;
+        }
       }
     }
     const hitKeys = [
       ...new Set([
         ...hitIds.map((id) => this.jscToDapKey.get(id)).filter((k): k is string => !!k),
         ...brakeKeys,
+        ...hitKeysAlias,
       ]),
     ];
     const hitLineEntries = hitKeys.map((k) => this.lineBreakpoints.get(k)).filter((b): b is LineBreakpoint => !!b);
@@ -746,7 +923,11 @@ export class BunDebugAdapter {
       return;
     }
 
-    const stop = brakeKeys.length > 0 ? { reason: 'breakpoint' } : this.mapStopReason(params.reason, params);
+    // A bp hit (via the brake overlap or a placeholder alias) always reports
+    // 'breakpoint', even when it coincides with the first pause — otherwise
+    // stopOnEntry + a bp at the entry statement surfaces as a spurious
+    // 'entry' stop at the bp's line.
+    const stop = brakeKeys.length > 0 || hitKeysAlias.length > 0 ? { reason: 'breakpoint' } : this.mapStopReason(params.reason, params);
     const hitDapIds = hitKeys
       .map((k) => (this.lineBreakpoints.get(k) ?? this.functionBreakpoints.get(k))?.id)
       .filter((id): id is number => id !== undefined);
