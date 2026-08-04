@@ -109,9 +109,15 @@ read/write memory, disassemble, cancel.
    `ws://` inspector URL off stderr, and connects.
 2. Breakpoints are set on the **TypeScript** path; JSC resolves them against
    the module's inline source map. Before the module parses
-   (`--inspect-wait` gate still closed), the breakpoint is deferred by the
-   engine and reported `verified:false` with `message: "pending script load"`;
-   a `breakpoint` changed event marks it verified once the script parses.
+   (`--inspect-wait` gate still closed), the breakpoint is deferred: the
+   adapter keeps it pending and reports `verified:false`. When the script
+   parses, its map is decoded synchronously from `scriptParsed.sourceMapURL`
+   (no RPC), the bp arms at its mapped generated coordinates — JSC resolves
+   URL-keyed breakpoints against generated lines, never TS lines — and a
+   `breakpoint` changed event marks it verified. A one-shot pre-gate
+   `Debugger.pause` freezes the entry module at its first statement until
+   those deferred arms land; if a bp's target IS that statement, the pause
+   stands in for its hit.
 3. `configurationDone` sends `Debugger.setBreakpointsActive` +
    `Inspector.initialized` — the gate opens and the program runs.
 4. On `Debugger.paused`, hit breakpoints gate on `condition`/`hitCondition`,

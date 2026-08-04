@@ -7,12 +7,13 @@
 //
 // Manual-test checklist:
 //   - breakpoints on the TS lines below (source-mapped: DAP lines are TS lines)
-//   - the multi-line header comment above is deliberate: it offsets the TS
-//     lines from the generated JS. A breakpoint set BEFORE the script loads
-//     (the normal launch flow) lands ~21 lines off — a known bun-dap bug (see
-//     the skipped `offset` test in test/adapter.test.ts). A breakpoint set
-//     AFTER a pause (stopOnEntry, or after the first stop) lands correctly via
-//     the source map.
+//   - the multi-line header comment above is deliberate: it shifts the TS
+//     lines off the generated JS lines. Deferred breakpoints (set before the
+//     script parses — the normal launch flow) used to misland because of
+//     that shift; the adapter now decodes this module's inline source map
+//     synchronously at parse and arms them at mapped generated coordinates,
+//     so they land exactly. The un-skipped `offset` regression test in
+//     test/adapter.test.ts covers the class of bug this header exposes.
 //   - step next / stepIn / stepOut across the functions
 //   - locals — JSC splits parameters into a Closure scope and block
 //     variables into Local; makeCounter's `count` lives in a Closure scope

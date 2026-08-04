@@ -155,11 +155,13 @@ test('stepping: stepIn resumes execution and re-stops or finishes', async () => 
     const stopped = await client.waitForEvent('stopped');
     expect(castObject(stopped.body).reason).toBe('breakpoint');
 
-    // JSC quirk (verified by raw probe): stepInto paused ON a call statement
-    // steps OVER the call instead of entering it, and with only one statement
-    // left in the module the step may run the program to its end. The adapter
-    // forwards stepInto faithfully; the contract is that the request is
-    // accepted, execution resumes, and the session either re-stops or exits.
+    // Deferred bps now land exactly (see the offset.ts regression test), so
+    // the stop pauses BEFORE the greet('World') call executes. stepInto from
+    // that state enters the call (a PauseOnNextStatement-derived pause steps
+    // in; only a real bp-pause made JSC step over same-module calls — the
+    // quirk this test's assertions once encoded). The contract is unchanged:
+    // the request is accepted, execution resumes, and the session either
+    // re-stops or exits.
     const si = await client.send('stepIn', { threadId: 1 });
     expect(si.success).toBe(true);
     const afterStep = await stopOrExit(client);
@@ -167,9 +169,15 @@ test('stepping: stepIn resumes execution and re-stops or finishes', async () => 
     if (afterStep.event === 'stopped') {
       expect(castObject(afterStep.body).reason).toBe('pause');
       const frame = await topOf(client);
-      expect(frame.name).not.toBe('greet');
       expect(String(castObject(frame.source).path)).toEndWith('hello.ts');
-      expect(frame.line).toBeGreaterThanOrEqual(7);
+      if (frame.name === 'greet') {
+        // Stepped into the call: inside greet's body (TS lines 2-4).
+        expect(frame.line).toBeGreaterThanOrEqual(2);
+        expect(frame.line).toBeLessThanOrEqual(4);
+      } else {
+        // Stepped over it (JSC's state-dependent stepInto flavor).
+        expect(frame.line).toBeGreaterThanOrEqual(7);
+      }
       const cont = await client.send('continue', { threadId: 1 });
       expect(cont.success).toBe(true);
       exitCode = castObject((await client.waitForEvent('exited', 10_000)).body).exitCode;

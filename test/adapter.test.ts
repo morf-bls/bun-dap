@@ -151,30 +151,27 @@ test('e2e: launch hello.ts, breakpoint, stack, scopes, variables, evaluate, cont
   }
 }, 30_000);
 
-// KNOWN BUG (deferred breakpoint misalignment) — skipped pending a fix.
-// Bun resolves deferred URL-keyed breakpoints against GENERATED JS coordinates,
-// not TS lines, so a breakpoint armed at `bp.line - 1` before the module parses
-// lands on the wrong statement when the generated layout diverges from the TS
-// source (comment headers, wrappers, Bun's line merging). The 9-line header in
-// test/fixtures/offset.ts shifts TS line 13 onto a generated line that maps
-// back to a different TS statement, so the pause lands at the wrong line.
-// Reproduction: launch examples/buggy.ts, setBreakpoints line 23 (applyDiscount
-// return) → pauses at makeCounter:44. bun's own adapter (bun-debug-adapter-protocol)
-// uses a line-0 placeholder + re-arm on breakpointResolved; that works for
-// offset-style files but, when ported, races fast/overlapping modules (hello.ts,
-// stepIn) where the placeholder's resolved statement coincides with the real
-// bp target. A hybrid (arm bp.line-1 + correct on resolve) loses the stop when
-// the target line executes during the correction RPC. Both hit fundamental JSC
-// timing races. See examples/buggy.ts and the report for the full analysis.
-test.skip('e2e: deferred breakpoint behind a comment header re-arms onto the requested TS line', async () => {
+// Regression test for the deferred-breakpoint misalignment (fixed): Bun
+// resolves URL-keyed breakpoints against GENERATED JS coordinates, not TS
+// lines. setBreakpoints used to arm deferred (pre-parse) bps at `bp.line - 1`
+// — a TS line treated as a generated line — which lands on the wrong statement
+// as soon as the generated layout diverges from the TS source (the 9-line
+// comment header below, or Bun's statement merging/inlining accumulating
+// across a file). The fix defers the arm to the source's scriptParsed (whose
+// map is decoded synchronously, matching bun's own bun-debug-adapter-protocol)
+// and freezes the VM with a one-shot pre-gate Debugger.pause so the mapped
+// arm always lands before the module body runs; if the bp's target IS that
+// first executed statement, the brake's pause stands in for the hit.
+test('e2e: deferred breakpoint behind a comment header re-arms onto the requested TS line', async () => {
   const client = connectStdio();
   try {
     await launchReady(client, offset);
-    // The script is not parsed yet (--inspect-wait gate still closed), so the
-    // adapter arms the breakpoint at `bp.line - 1` directly. Bun resolves that
-    // against GENERATED coordinates; with the 9-line comment header the
-    // generated layout diverges from the TS layout, so the pause lands on the
-    // wrong TS line instead of the requested line 13 (`return sum`).
+    // offset.ts has a 9-line comment header, so its generated JS layout
+    // diverges from the TS layout. Pre-fix, the deferred arm at `bp.line - 1`
+    // resolved against generated coordinates and the pause landed on a
+    // different TS statement. Post-fix the bp arms deferred at the mapped
+    // generated location and the pause must land on the requested line 13
+    // (`return sum`).
     await armBreakpoint(client, offset, 13);
 
     const stopped = await client.waitForEvent('stopped');
@@ -186,11 +183,23 @@ test.skip('e2e: deferred breakpoint behind a comment header re-arms onto the req
     expect(frames.length).toBeGreaterThan(0);
     const top = frames[0]!;
     expect(top.line).toBe(13); // requested TS line, not the offset-shifted one
+    expect(top.name).toBe('add');
     const src = castObject(top.source);
     expect(String(src.path)).toEndWith('offset.ts');
 
+    // bp 13 sits inside add, which main calls twice: the correctly placed
+    // breakpoint must fire on BOTH passes, each time at the requested line.
     const cont = await client.send('continue', { threadId: 1 });
     expect(cont.success).toBe(true);
+    const stopped2 = await client.waitForEvent('stopped');
+    expect(castObject(stopped2.body).reason).toBe('breakpoint');
+    const frames2 = castObject((await client.send('stackTrace', { threadId: 1, startFrame: 0, levels: 10 })).body)
+      .stackFrames as Array<Record<string, unknown>>;
+    expect(frames2[0]?.line).toBe(13);
+    expect(frames2[0]?.name).toBe('add');
+    const cont2 = await client.send('continue', { threadId: 1 });
+    expect(cont2.success).toBe(true);
+
     const exited = await client.waitForEvent('exited');
     expect(castObject(exited.body).exitCode).toBe(0);
     await client.waitForEvent('terminated');

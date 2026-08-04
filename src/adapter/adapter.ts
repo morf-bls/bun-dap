@@ -5,7 +5,7 @@ import { Handles } from '@vscode/debugadapter';
 import type { DebugProtocol } from '@vscode/debugprotocol';
 import { WebSocketInspector } from '../inspector/websocket-inspector';
 import { formatRemoteObject } from '../inspector/preview';
-import type { CallFrame, CallFrameId, PausedEvent, RemoteObject, ScriptParsedEvent } from '../inspector/jsc-types';
+import type { BreakpointResolvedEvent, CallFrame, CallFrameId, PausedEvent, RemoteObject, ScriptParsedEvent, SetBreakpointByUrlParams } from '../inspector/jsc-types';
 import { SourceMap, NoopSourceMap, type AnySourceMap } from '../sourcemap';
 import { getAvailablePort } from '../util/port';
 
@@ -65,7 +65,6 @@ interface LineBreakpoint {
   jscBreakpointId?: string;
   verified: boolean;
   hitCount: number;
-  pendingResolved: boolean;
   message?: string;
 }
 
@@ -117,6 +116,23 @@ export class BunDebugAdapter {
   private functionBreakpoints = new Map<string, FunctionBreakpoint>();
   /** jscBreakpointId -> dap bp key (line and function). */
   private jscToDapKey = new Map<string, string>();
+  /**
+   * Deferred line breakpoints per canonical (realpath'd) source path. A bp
+   * lands here when setBreakpoints arrives before its script's
+   * Debugger.scriptParsed — the normal launch flow, since --inspect-wait holds
+   * parsing until configurationDone. The bp arms at its source-mapped
+   * generated coordinates the moment the script (and its synchronously
+   * decoded map) shows up in onScriptParsed.
+   */
+  private pendingByPath = new Map<string, string[]>();
+  /**
+   * True between configurationDone arming the one-shot entry brake (a
+   * pre-gate `Debugger.pause`, legal and deterministic per probe) and its
+   * pause firing at the module body's first executed statement. Without it,
+   * deferred bps whose target executes within microseconds of parse end would
+   * bind too late. See onPaused for the swallow/overlap handling.
+   */
+  private brakePending = false;
   private nextDapBpId = 1;
   private nextBpKey = 1;
 
@@ -298,9 +314,9 @@ export class BunDebugAdapter {
     await inspector.send('Debugger.enable');
     await inspector.send('Debugger.setAsyncStackTraceDepth', { depth: 0 });
 
-    inspector.on('Debugger.scriptParsed', (params) => void this.onScriptParsed(params as ScriptParsedEvent));
+    inspector.on('Debugger.scriptParsed', (params) => this.onScriptParsed(params as ScriptParsedEvent));
     inspector.on('Debugger.paused', (params) => void this.onPaused(params as PausedEvent));
-    inspector.on('Debugger.breakpointResolved', (params) => this.onBreakpointResolved(params as { breakpointId: string }));
+    inspector.on('Debugger.breakpointResolved', (params) => this.onBreakpointResolved(params as BreakpointResolvedEvent));
     inspector.on('Debugger.resumed', () => this.onResumed());
 
     if (this.mode === 'launch' && this.stopOnEntry) this.firstPausePending = true;
@@ -386,6 +402,22 @@ export class BunDebugAdapter {
           this.diagnostic(`entry breakpoint failed: ${(err as Error).message}`);
         }
       }
+      // Deferred-breakpoint brake: one pre-gate Debugger.pause so the VM
+      // freezes at the module body's FIRST executed statement (probe-verified:
+      // legal while gated; arrives as reason PauseOnNextStatement with no
+      // data). Deferred bps arm at their mapped coordinates while frozen
+      // (see onScriptParsed); without the brake a bp whose target runs within
+      // microseconds of parse end would bind too late. The pause is consumed
+      // — swallowed or surfaced as a bp's stop — in onPaused. Skipped when
+      // nothing is deferred, and launch-only: attach mode has no gate.
+      if (this.mode === 'launch' && this.pendingByPath.size > 0) {
+        try {
+          await inspector.send('Debugger.pause');
+          this.brakePending = true;
+        } catch (err) {
+          this.diagnostic(`entry brake failed: ${(err as Error).message}`);
+        }
+      }
       await inspector.send('Debugger.setBreakpointsActive', { active: !this.noDebug });
       await inspector.send('Inspector.initialized');
     }
@@ -398,7 +430,15 @@ export class BunDebugAdapter {
   // Script parsing + source map loading
   // ------------------------------------------------------------------
 
-  private async onScriptParsed(params: ScriptParsedEvent): Promise<void> {
+  /**
+   * Registers the script and decodes its source map SYNCHRONOUSLY from
+   * `scriptParsed.sourceMapURL` (a base64 data URI in Bun), mirroring bun's own
+   * debug adapter (`SourceMap(sourceMapURL)`; no `Debugger.getScriptSource` RPC).
+   * Synchronous decode is load-bearing for deferred breakpoints: the pending
+   * arms below must issue their sends the moment the map exists — for the
+   * launch entry, while the VM is still frozen by configurationDone's brake.
+   */
+  private onScriptParsed(params: ScriptParsedEvent): void {
     const { scriptId, url } = params;
     let entry = this.sources.get(url);
     if (!entry) {
@@ -406,33 +446,79 @@ export class BunDebugAdapter {
       this.sources.set(url, entry);
     }
     this.sourcesByScriptId.set(scriptId, entry);
-    try {
-      const { scriptSource } = await this.requireInspector().send('Debugger.getScriptSource', { scriptId });
-      const src = entry.path;
-      let map: AnySourceMap | null = null;
-      if (params.sourceMapURL) {
-        try {
-          map = SourceMap.fromSourceMapURL(params.sourceMapURL, src);
-        } catch (err) {
-          this.diagnostic(`source map decode failed for ${src}: ${(err as Error).message}`);
-        }
-      } else {
-        map = SourceMap.fromSourceText(scriptSource, src);
+    let map: AnySourceMap | null = null;
+    if (params.sourceMapURL) {
+      try {
+        map = SourceMap.fromSourceMapURL(params.sourceMapURL, url);
+      } catch (err) {
+        this.diagnostic(`source map decode failed for ${url}: ${(err as Error).message}`);
       }
-      entry.sourceMap = map ?? new NoopSourceMap();
-    } catch (err) {
-      this.diagnostic(`getScriptSource failed for ${url}: ${(err as Error).message}`);
-      entry.sourceMap = new NoopSourceMap();
+    }
+    entry.sourceMap = map ?? new NoopSourceMap();
+
+    // Deferred breakpoints for this source: arm them now, at map-derived
+    // generated coordinates. When this script is the launch entry, the VM is
+    // guaranteed frozen at (or before) its first statement by the brake armed
+    // in configurationDone, and this scriptParsed event was delivered to us
+    // before that pause — so these binds always land before the body can run
+    // past them. (For a mid-session source the body is long-running or idle;
+    // binds apply to future executions, as with any post-parse arm.)
+    const pending = this.pendingByPath.get(url);
+    if (pending) {
+      this.pendingByPath.delete(url);
+      for (const key of pending) {
+        const bp = this.lineBreakpoints.get(key);
+        if (bp) void this.armLineBreakpoint(url, key, bp, entry.sourceMap);
+      }
     }
   }
 
-  private onBreakpointResolved(params: { breakpointId: string }): void {
+  private onBreakpointResolved(params: BreakpointResolvedEvent): void {
     const key = this.jscToDapKey.get(params.breakpointId);
     if (!key) return;
     const bp = this.lineBreakpoints.get(key);
     if (bp && bp.jscBreakpointId === params.breakpointId && !bp.verified) {
       bp.verified = true;
       this.host?.sendBreakpointChanged({ id: bp.id, line: bp.line, verified: true });
+    }
+  }
+
+  /**
+   * Arm one line breakpoint against JSC at its source-mapped generated
+   * coordinates. JSC resolves URL-keyed breakpoints against GENERATED
+   * lines/columns (0-based), never TS lines, so the arm must go through the
+   * map (statement-start column scan) — the root cause of the deferred-bp
+   * misalignment fixed alongside this. A `locations: []` result is NOT a
+   * failure: the bp can still resolve later via its own
+   * `Debugger.breakpointResolved`, which flips verified in onBreakpointResolved.
+   */
+  private async armLineBreakpoint(absPath: string, key: string, bp: LineBreakpoint, map: AnySourceMap): Promise<void> {
+    const gen = map.generatedLocation(bp.line, 0);
+    if (gen === null) {
+      bp.message = 'breakpoint does not map to generated code';
+      this.host?.sendBreakpointChanged({ id: bp.id, line: bp.line, verified: false, message: bp.message });
+      return;
+    }
+    const params: SetBreakpointByUrlParams = {
+      url: absPath,
+      lineNumber: gen.line - 1,
+      condition: bp.condition,
+      isAutoContinue: false,
+    };
+    // NoopSourceMap columns are a constant identity (1) that can point at
+    // leading whitespace (`locations: []`); omit and let JSC snap per line.
+    if (map instanceof SourceMap) params.columnNumber = gen.column - 1;
+    try {
+      const result = await this.requireInspector().send('Debugger.setBreakpointByUrl', params);
+      bp.jscBreakpointId = result.breakpointId;
+      this.jscToDapKey.set(result.breakpointId, key);
+      if (!bp.verified && result.locations.length > 0) {
+        bp.verified = true;
+        this.host?.sendBreakpointChanged({ id: bp.id, line: bp.line, verified: true });
+      }
+    } catch (err) {
+      bp.message = (err as Error).message;
+      this.host?.sendBreakpointChanged({ id: bp.id, line: bp.line, verified: false, message: bp.message });
     }
   }
 
@@ -456,7 +542,9 @@ export class BunDebugAdapter {
       absPath = resolve(path); // not on disk (yet) — JSC matches the literal URL
     }
 
-    // Remove previously armed breakpoints for this source (full replacement).
+    // Remove previously armed breakpoints for this source (full replacement),
+    // including any not-yet-armed deferred requests for it.
+    this.pendingByPath.delete(absPath);
     for (const [key, bp] of [...this.lineBreakpoints]) {
       if (bp.path !== absPath) continue;
       this.lineBreakpoints.delete(key);
@@ -480,7 +568,6 @@ export class BunDebugAdapter {
         logMessage: requested.logMessage,
         verified: false,
         hitCount: 0,
-        pendingResolved: false,
       };
       this.lineBreakpoints.set(key, bp);
 
@@ -493,51 +580,22 @@ export class BunDebugAdapter {
         }
       }
 
-      const map = entry?.sourceMap;
-      if (entry && map instanceof SourceMap) {
-        const gen = map.generatedLocation(bp.line, 0);
-        if (gen === null) {
-          bp.message = 'breakpoint does not map to generated code';
-          out.push({ id: bp.id, verified: false, line: bp.line, message: bp.message });
-          continue;
-        }
-        try {
-          const result = await this.requireInspector().send('Debugger.setBreakpointByUrl', {
-            url: absPath,
-            lineNumber: gen.line - 1,
-            columnNumber: gen.column - 1,
-            condition: bp.condition,
-            isAutoContinue: false,
-          });
-          bp.jscBreakpointId = result.breakpointId;
-          this.jscToDapKey.set(result.breakpointId, key);
-          bp.verified = result.locations.length > 0;
-          bp.pendingResolved = bp.verified;
-        } catch (err) {
-          bp.message = (err as Error).message;
-          out.push({ id: bp.id, verified: false, line: bp.line, message: bp.message });
-        }
-    } else {
-      // Script not parsed yet: JSC/Bun natively defers URL-keyed breakpoints
-      // until the module parses, then resolves them through the script's
-      // source map (Bun embeds an inline map). Arm the real TS line directly;
-      // verified flips to true via Debugger.breakpointResolved. A line-0
-      // placeholder + re-arm would race fast-exiting modules and lose the stop.
-      try {
-        const result = await this.requireInspector().send('Debugger.setBreakpointByUrl', {
-          url: absPath,
-          lineNumber: bp.line - 1,
-          condition: bp.condition,
-          isAutoContinue: false,
-        });
-        bp.jscBreakpointId = result.breakpointId;
-        this.jscToDapKey.set(result.breakpointId, key);
-        bp.verified = result.locations.length > 0;
-        bp.pendingResolved = result.locations.length > 0;
-      } catch (err) {
-        bp.message = (err as Error).message;
+      if (entry) {
+        // The script is parsed (its map decoded synchronously at scriptParsed):
+        // arm immediately at the mapped generated coordinates.
+        await this.armLineBreakpoint(absPath, key, bp, entry.sourceMap!);
+      } else {
+        // The script is not parsed yet (the normal launch flow — setBreakpoints
+        // arrives while the --inspect-wait gate holds parsing). Defer: the bp
+        // arms at mapped coordinates from onScriptParsed, which always follows
+        // (a Path B state only exists when that event has not been delivered
+        // yet), and configurationDone's pre-gate brake freezes the entry
+        // module's body until that happened. Verified flips true via a
+        // breakpoint changed event once the arm lands.
+        let keys = this.pendingByPath.get(absPath);
+        if (!keys) this.pendingByPath.set(absPath, (keys = []));
+        keys.push(key);
       }
-    }
       out.push({ id: bp.id, verified: bp.verified, line: bp.line, message: bp.message });
     }
     return out;
@@ -627,7 +685,29 @@ export class BunDebugAdapter {
       }
       if (typeof data.breakpointId === 'string') hitIds.push(data.breakpointId);
     }
-    const hitKeys = hitIds.map((id) => this.jscToDapKey.get(id)).filter((k): k is string => !!k);
+    // Entry brake (configurationDone sent a pre-gate Debugger.pause because
+    // deferred breakpoints were pending): the VM froze at the module body's
+    // first executed statement, with deferred bps armed meanwhile (their
+    // scriptParsed was processed first on the socket). If a bp targets THIS
+    // statement, the pause is that bp's hit — a bp bound at the pause
+    // location does not re-fire once resumed — so its keys join the normal
+    // gating below and the stop reports as 'breakpoint'. Otherwise the brake
+    // is internal machinery: resume silently.
+    let brakeKeys: string[] = [];
+    if (this.brakePending) {
+      this.brakePending = false;
+      brakeKeys = this.brakeOverlapKeys();
+      if (brakeKeys.length === 0) {
+        await this.resumeInternal();
+        return;
+      }
+    }
+    const hitKeys = [
+      ...new Set([
+        ...hitIds.map((id) => this.jscToDapKey.get(id)).filter((k): k is string => !!k),
+        ...brakeKeys,
+      ]),
+    ];
     const hitLineEntries = hitKeys.map((k) => this.lineBreakpoints.get(k)).filter((b): b is LineBreakpoint => !!b);
     const hitFnEntries = hitKeys.map((k) => this.functionBreakpoints.get(k)).filter((b): b is FunctionBreakpoint => !!b);
 
@@ -662,8 +742,11 @@ export class BunDebugAdapter {
       return;
     }
 
-    const stop = this.mapStopReason(params.reason, params);
-    this.emitStopped(stop, hitIds);
+    const stop = brakeKeys.length > 0 ? { reason: 'breakpoint' } : this.mapStopReason(params.reason, params);
+    const hitDapIds = hitKeys
+      .map((k) => (this.lineBreakpoints.get(k) ?? this.functionBreakpoints.get(k))?.id)
+      .filter((id): id is number => id !== undefined);
+    this.emitStopped(stop, hitDapIds);
     // The entry breakpoint is one-shot: disarm it after the first stop so
     // `continue` cannot re-hit line 0.
     if (this.entryBreakpointId !== undefined) {
@@ -738,6 +821,31 @@ export class BunDebugAdapter {
     }
   }
 
+  /**
+   * Bps whose source-mapped target IS the brake pause's statement. A bp that
+   * got bound at the exact location the brake paused on can never fire
+   * (resume does not re-trigger the pause statement), so the brake's pause
+   * stands in for the hit. Column-exact for real source maps; line-only for
+   * NoopSourceMap, whose identity column is unreliable.
+   */
+  private brakeOverlapKeys(): string[] {
+    const frame = this.currentCallFrames[0];
+    const loc = frame?.location;
+    if (!loc) return [];
+    const entry = this.sourcesByScriptId.get(loc.scriptId);
+    const map = entry?.sourceMap;
+    if (!entry || !map) return [];
+    const keys: string[] = [];
+    for (const [key, bp] of this.lineBreakpoints) {
+      if (bp.path !== entry.path) continue;
+      const gen = map.generatedLocation(bp.line, 0);
+      if (gen === null || gen.line - 1 !== loc.lineNumber) continue;
+      if (map instanceof SourceMap && gen.column - 1 !== loc.columnNumber) continue;
+      keys.push(key);
+    }
+    return keys;
+  }
+
   private onResumed(): void {
     this.paused = false;
     this.currentCallFrames = [];
@@ -751,12 +859,7 @@ export class BunDebugAdapter {
     await this.requireInspector().send('Debugger.resume');
   }
 
-  private emitStopped(stop: { reason: string; exceptionText?: string }, hitJscIds: string[]): void {
-    const hitBreakpointIds = hitJscIds
-      .map((id) => this.jscToDapKey.get(id))
-      .filter((k): k is string => !!k)
-      .map((k) => (this.lineBreakpoints.get(k) ?? this.functionBreakpoints.get(k))?.id)
-      .filter((id): id is number => !!id);
+  private emitStopped(stop: { reason: string; exceptionText?: string }, hitBreakpointIds: number[]): void {
     const emit = () => this.host?.sendStopped(stop.reason, 1, stop.exceptionText, hitBreakpointIds.length > 0 ? hitBreakpointIds : undefined);
     if (!this.initializedSent) {
       this.stoppedBuffer.push(emit);
