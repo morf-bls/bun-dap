@@ -11,9 +11,10 @@ import { getAvailablePort } from '../src/util/port';
 // breakpoints, exception filters actually pausing, and noDebug runs.
 //
 // Stopped reasons after steps: JSC pauses with a unified
-// PauseOnNextStatement reason for both user `pause` and completed stepping,
-// and the adapter reports both as 'pause' (see mapStopReason) — the stepping
-// tests below assert that documented mapping.
+// PauseOnNextStatement reason for both user `pause` and completed stepping;
+// the adapter distinguishes them via the stepPending flag set by
+// next/stepIn/stepOut — user pauses report 'pause', step completions 'step'.
+// The stepping tests below assert that documented mapping.
 
 const repoRoot = resolve(import.meta.dir, '..');
 
@@ -144,10 +145,12 @@ test('stepping: next and stepOut move through greet', async () => {
     expect(castObject(stopped.body).reason).toBe('breakpoint');
 
     // next over `const greeting` onto `console.log(greeting)` (TS line 3).
+    // Step-completion pauses report reason 'step' (nvim-dap only moves the
+    // cursor for 'step'; 'pause' left the UI stranded at the bp line).
     const nx1 = await client.send('next', { threadId: 1 });
     expect(nx1.success).toBe(true);
     const step1 = await client.waitForEvent('stopped', 10_000);
-    expect(castObject(step1.body).reason).toBe('pause'); // step pauses report 'pause'
+    expect(castObject(step1.body).reason).toBe('step');
     const afterNext1 = await topOf(client);
     expect(afterNext1.name).toBe('greet');
     expect(afterNext1.line).toBe(3);
@@ -156,7 +159,7 @@ test('stepping: next and stepOut move through greet', async () => {
     const nx2 = await client.send('next', { threadId: 1 });
     expect(nx2.success).toBe(true);
     const step2 = await client.waitForEvent('stopped', 10_000);
-    expect(castObject(step2.body).reason).toBe('pause');
+    expect(castObject(step2.body).reason).toBe('step');
     const afterNext2 = await topOf(client);
     expect(afterNext2.name).toBe('greet');
     expect(afterNext2.line).toBe(4);
@@ -166,7 +169,7 @@ test('stepping: next and stepOut move through greet', async () => {
     const so = await client.send('stepOut', { threadId: 1 });
     expect(so.success).toBe(true);
     const step3 = await client.waitForEvent('stopped', 10_000);
-    expect(castObject(step3.body).reason).toBe('pause');
+    expect(castObject(step3.body).reason).toBe('step');
     const backOut = await topOf(client);
     expect(backOut.name).not.toBe('greet');
     expect(String(castObject(backOut.source).path)).toEndWith('hello.ts');
@@ -205,7 +208,7 @@ test('stepping: stepIn resumes execution and re-stops or finishes', async () => 
     const afterStep = await stopOrExit(client);
     let exitCode: unknown;
     if (afterStep.event === 'stopped') {
-      expect(castObject(afterStep.body).reason).toBe('pause');
+      expect(castObject(afterStep.body).reason).toBe('step');
       const frame = await topOf(client);
       expect(String(castObject(frame.source).path)).toEndWith('hello.ts');
       if (frame.name === 'greet') {

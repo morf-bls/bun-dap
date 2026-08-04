@@ -119,6 +119,15 @@ export class BunDebugAdapter {
   private configDoneSent = false;
   private initializedSent = false;
   private firstPausePending = false;
+  /**
+   * True between a next/stepIn/stepOut request and the pause that completes
+   * it. JSC reports step completion as reason PauseOnNextStatement —
+   * indistinguishable from a Debugger.pause brake on the wire — so
+   * mapStopReason consults this flag to report 'step' (upstream tracks the
+   * pending step the same way). Survives bp hits mid-step: those map to
+   * 'breakpoint' without consuming the flag.
+   */
+  private stepPending = false;
   private paused = false;
   private attachHost: string | null = null;
   private entryBreakpointUrl: string | null = null;
@@ -382,14 +391,21 @@ export class BunDebugAdapter {
   }
 
   async next(): Promise<void> {
+    // Mark synchronously (upstream sets #stopped = "step" the same way): JSC
+    // reports the step-completion pause as PauseOnNextStatement — the same
+    // reason as a Debugger.pause brake — so mapStopReason needs this flag to
+    // tell them apart. nvim-dap only re-renders the cursor on reason 'step'.
+    this.stepPending = true;
     await this.inspector?.send('Debugger.stepNext');
   }
 
   async stepIn(): Promise<void> {
+    this.stepPending = true;
     await this.inspector?.send('Debugger.stepInto');
   }
 
   async stepOut(): Promise<void> {
+    this.stepPending = true;
     await this.inspector?.send('Debugger.stepOut');
   }
 
@@ -996,12 +1012,28 @@ export class BunDebugAdapter {
       case 'PauseOnNextStatement':
       case 'AlreadyPaused':
       case 'entry':
+        // A next/stepIn/stepOut request is in flight: this pause is its
+        // completion. Checked before firstPausePending — the brake swallow
+        // and placeholder branches run before mapStopReason and never reach
+        // here with stepPending set, so the flag belongs to a real step.
+        if (this.stepPending) {
+          this.stepPending = false;
+          return { reason: 'step' };
+        }
         if (this.firstPausePending) {
           this.firstPausePending = false;
           return { reason: 'entry' };
         }
         return { reason: 'pause' };
       default:
+        // Bun reports step completion as reason 'other' on some versions
+        // (probe-verified: next from a bp pause). Upstream's #stopped flag
+        // wins over ANY unrecognized reason the same way; a bp hit mid-step
+        // maps 'breakpoint' above and leaves the flag for the completion.
+        if (this.stepPending) {
+          this.stepPending = false;
+          return { reason: 'step' };
+        }
         return { reason: 'pause' };
     }
   }
