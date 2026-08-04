@@ -1,0 +1,27 @@
+{
+  "name": "bun-dap",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "bun-dap": "src/cli.ts"
+  },
+  "exports": "./src/cli.ts",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "bun build src/cli.ts --target=bun --outfile dist/bun-dap"
+  },
+  "dependencies": {
+    "@vscode/debugadapter": "^1.68.0",
+    "@vscode/debugprotocol": "^1.68.0",
+    "ws": "^8.18.0",
+    "source-map-js": "^1.0.2",
+    "semver": "^7.6.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.10",
+    "@types/bun": "^1.1.0",
+    "typescript": "^5.6.0",
+    "@vscode/debugadapter-testsupport": "^1.68.0"
+  }
+}
