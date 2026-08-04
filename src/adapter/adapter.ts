@@ -692,12 +692,16 @@ export class BunDebugAdapter {
     // statement, the pause is that bp's hit — a bp bound at the pause
     // location does not re-fire once resumed — so its keys join the normal
     // gating below and the stop reports as 'breakpoint'. Otherwise the brake
-    // is internal machinery: resume silently.
+    // is internal machinery: resume silently — UNLESS stopOnEntry is still
+    // owed: the entry bp and the brake resolve to the same statement whenever
+    // the file's first pausable statement is its first executed one, so the
+    // pause must fall through and surface as the 'entry' stop (which also
+    // runs the entry-bp disarm below).
     let brakeKeys: string[] = [];
     if (this.brakePending) {
       this.brakePending = false;
       brakeKeys = this.brakeOverlapKeys();
-      if (brakeKeys.length === 0) {
+      if (brakeKeys.length === 0 && !this.firstPausePending) {
         await this.resumeInternal();
         return;
       }

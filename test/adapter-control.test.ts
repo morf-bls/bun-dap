@@ -90,6 +90,44 @@ test('stopOnEntry: pauses with reason entry before the program body runs', async
   }
 }, 30_000);
 
+test('stopOnEntry with deferred breakpoints: entry stop survives the brake', async () => {
+  // Regression: when deferred user bps are pending, configurationDone arms a
+  // pre-gate brake. For a file whose first pausable statement IS its first
+  // executed one (server.ts: top-level `const port`), the brake and the
+  // line-0 entry bp resolve to the SAME statement — the pause is the entry
+  // stop and must NOT be swallowed by the brake.
+  const client = connectStdio();
+  try {
+    const httpPort = await getAvailablePort();
+    await launchWith(client, serverFixture, { stopOnEntry: true, env: { PORT: String(httpPort) } });
+    await armBreakpoint(client, serverFixture, 7);
+    const stopped = await client.waitForEvent('stopped', 10_000);
+    expect(castObject(stopped.body).reason).toBe('entry');
+    expect(castObject(stopped.body).threadId).toBe(1);
+
+    const cont = await client.send('continue', { threadId: 1 });
+    expect(cont.success).toBe(true);
+    // The server body finishes; the bp inside the fetch handler arms clean.
+
+    // The next request pauses in the handler at line 7 — reported as
+    // 'breakpoint', not 'entry', proving the brake swallow did not strand
+    // firstPausePending.
+    expect(await probe(`http://127.0.0.1:${httpPort}/hit`)).toBe('paused');
+    const stopped2 = await client.waitForEvent('stopped', 10_000);
+    expect(castObject(stopped2.body).reason).toBe('breakpoint');
+    expect(await topOf(client).then((f) => f.line)).toBe(7);
+
+    const cont2 = await client.send('continue', { threadId: 1 });
+    expect(cont2.success).toBe(true);
+    // Disconnect kills the launched server fixture.
+    const disc = await client.send('disconnect', {});
+    expect(disc.success).toBe(true);
+    await client.waitForEvent('exited', 10_000);
+  } finally {
+    client.close();
+  }
+}, 30_000);
+
 const topOf = async (client: Client): Promise<Record<string, unknown>> => {
   const resp = await client.send('stackTrace', { threadId: 1, startFrame: 0, levels: 10 });
   const frames = castObject(resp.body).stackFrames as Array<Record<string, unknown>>;
