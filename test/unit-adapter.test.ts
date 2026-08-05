@@ -716,3 +716,47 @@ test('L29: variables honors start/count paging', async () => {
   const page = await adapter.variables({ variablesReference: ref, start: 2, count: 3 });
   expect(page.map((v) => v.name), 'start/count slice').toEqual(['p2', 'p3', 'p4']);
 }, 10_000);
+
+// B2a: pins the `isAbsolute` + empty-string internal-frame classification
+// (replaces the old `!startsWith('/')` check that mis-flagged Windows absolute
+// paths). On posix these guard the branch we actually run under; the fix is
+// cross-OS but the observable contract is platform-dependent.
+test('B2a: absolute-posix-path frame is NOT internal', async () => {
+  const mock = new MockInspector();
+  const { host } = recordingHost();
+  const { adapter } = await mountAdapter(mock, host);
+
+  mock.emit('Debugger.scriptParsed', { scriptId: 's1', url: ABS_PATH, startLine: 0, startColumn: 0 });
+  const pause = makePause(0, 'Breakpoint', { breakpoints: ['bp1'] });
+  mock.emit('Debugger.paused', pause);
+  await delay(20);
+
+  const { stackFrames } = await adapter.stackTrace({ threadId: 1, startFrame: 0 });
+  expect(stackFrames.length, 'a frame is reported').toBe(1);
+  // isAbsolute('/src/mod.ts') === true → not internal: real source, no subtle hint.
+  expect(stackFrames[0]!.presentationHint, 'absolute path not subtle').toBeUndefined();
+  expect(stackFrames[0]!.source?.path, 'source path preserved').toBe(ABS_PATH);
+  expect(stackFrames[0]!.name, 'not <internal>').not.toBe('<internal>');
+}, 10_000);
+
+test('B2a: empty/non-absolute path frame IS internal', async () => {
+  const mock = new MockInspector();
+  const { host } = recordingHost();
+  const { adapter } = await mountAdapter(mock, host);
+
+  // No sourceMapURL → NoopSourceMap; an empty url yields sourcePath '' which
+  // is the explicit internal branch (sourcePath === '').
+  mock.emit('Debugger.scriptParsed', { scriptId: 's2', url: '', startLine: 0, startColumn: 0 });
+  const pause = makePause(0, 'Breakpoint', { breakpoints: ['bp1'] });
+  // Re-target the frame's location to the empty-url script.
+  pause.callFrames[0]!.location = { scriptId: 's2', lineNumber: 0, columnNumber: 0 };
+  mock.emit('Debugger.paused', pause);
+  await delay(20);
+
+  const { stackFrames } = await adapter.stackTrace({ threadId: 1, startFrame: 0 });
+  expect(stackFrames.length, 'a frame is reported').toBe(1);
+  // empty path → internal: subtle hint, <internal> name, no source object.
+  expect(stackFrames[0]!.presentationHint, 'empty path is subtle').toBe('subtle');
+  expect(stackFrames[0]!.name, 'internal name').toBe('<internal>');
+  expect(stackFrames[0]!.source, 'no source for internal').toBeUndefined();
+}, 10_000);
