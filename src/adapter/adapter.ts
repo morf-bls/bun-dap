@@ -431,6 +431,8 @@ export class BunDebugAdapter {
     // the swallow paths for the same reason.
     this.stepPending = false;
     await this.inspector?.send('Debugger.resume');
+    // JSC may omit Debugger.resumed (see clearPauseState); clear eagerly.
+    this.clearPauseState();
   }
 
   async next(): Promise<void> {
@@ -447,6 +449,10 @@ export class BunDebugAdapter {
       this.stepPending = false;
       throw err;
     }
+    // JSC does not reliably emit Debugger.resumed after stepNext
+    // (probe-verified); clear pause state eagerly so a stackTrace before
+    // the completion pause does not return stale frames.
+    this.clearPauseState();
   }
 
   async stepIn(): Promise<void> {
@@ -457,6 +463,7 @@ export class BunDebugAdapter {
       this.stepPending = false;
       throw err;
     }
+    this.clearPauseState();
   }
 
   async stepOut(): Promise<void> {
@@ -467,6 +474,7 @@ export class BunDebugAdapter {
       this.stepPending = false;
       throw err;
     }
+    this.clearPauseState();
   }
 
   async pause(): Promise<void> {
@@ -1200,14 +1208,22 @@ export class BunDebugAdapter {
     return keys;
   }
 
-  private onResumed(): void {
+  private clearPauseState(): void {
+    // Mirror onResumed: drop paused + the frame tables so a stackTrace
+    // between the resume/step RPC and the next pause does not return stale
+    // frames. JSC does not reliably emit Debugger.resumed (never after
+    // stepNext — probe-verified), so the resume/step send paths must clear
+    // this themselves; onResumed still does it for the cases JSC does emit.
+    // objectRefs is NOT reset here — only at onPaused start, the one
+    // transition every pause passes through.
     this.paused = false;
     this.currentCallFrames = [];
     this.currentFrameIds = [];
     this.frameIdToCallFrame.clear();
-    // objectRefs intentionally NOT reset here: JSC does not reliably emit
-    // resumed (never after stepNext — probe-verified), so the reset lives at
-    // the start of onPaused, the one transition every pause passes through.
+  }
+
+  private onResumed(): void {
+    this.clearPauseState();
   }
 
   private async resumeInternal(): Promise<void> {
@@ -1220,6 +1236,7 @@ export class BunDebugAdapter {
     // printed the log and ran free, step absorbed).
     this.stepPending = false;
     await this.requireInspector().send('Debugger.resume');
+    this.clearPauseState();
   }
 
   private emitStopped(stop: { reason: string; exceptionText?: string }, hitBreakpointIds: number[]): void {

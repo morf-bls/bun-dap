@@ -478,3 +478,26 @@ test('L17: evaluate with stale/unknown frameId throws, not global scope', async 
   const runtimeEvals = mock.sent.filter((s) => s.method === 'Runtime.evaluate');
   expect(runtimeEvals.length, 'no global-scope Runtime.evaluate for stale frame').toBe(0);
 }, 10_000);
+
+test('L18: next() clears pause state when JSC omits Debugger.resumed', async () => {
+  const mock = new MockInspector();
+  const { host } = recordingHost();
+  armCounter(mock, 'bp');
+  mock.reply('Debugger.stepNext', undefined);
+  const { adapter, seam } = await mountAdapter(mock, host);
+
+  mock.emit('Debugger.scriptParsed', { scriptId: 's1', url: ABS_PATH, startLine: 0, startColumn: 0 });
+  await adapter.setBreakpoints({ source: { path: ABS_PATH }, breakpoints: [{ line: BP_LINE }] });
+  await adapter.configurationDone();
+  mock.emit('Debugger.paused', makePause(BP_LINE - 1, 'Breakpoint', { breakpoints: ['bp1'] }));
+  await delay(50);
+  expect(seam.paused, 'paused after bp hit').toBe(true);
+  expect((await adapter.stackTrace({ threadId: 1, startFrame: 0 })).stackFrames.length, 'frames after bp hit').toBe(1);
+
+  // Step next. JSC does NOT emit Debugger.resumed here (probe-verified), so
+  // pre-fix the adapter stayed paused with stale frames.
+  await adapter.next();
+  await delay(20);
+  expect(seam.paused, 'paused cleared after next()').toBe(false);
+  expect((await adapter.stackTrace({ threadId: 1, startFrame: 0 })).stackFrames.length, 'stackTrace empty after next()').toBe(0);
+}, 10_000);

@@ -106,6 +106,7 @@ interface AdapterTestSeam {
   launchedChild: unknown;
   mode: 'launch' | 'attach' | null;
   attachHost: string | null;
+  paused: boolean;
 }
 
 /**
