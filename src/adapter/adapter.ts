@@ -1290,7 +1290,7 @@ export class BunDebugAdapter {
       const jsLine = frame.location.lineNumber;
       const jsCol = frame.location.columnNumber ?? 0;
       let line = jsLine + 1;
-      let column = 0;
+      let column = 1;
       let sourcePath = entry?.path ?? '';
       const orig = map ? map.originalLocation(jsLine, jsCol) : null;
       if (orig && map instanceof SourceMap && orig.source !== '<unmapped>') {

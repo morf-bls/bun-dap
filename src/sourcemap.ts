@@ -83,15 +83,18 @@ export class SourceMap {
     return { line: candidates[0]!.gl, column: candidates[0]!.gc + 1 };
   }
 
-  /** Map a 0-based JS line/column back to the original 1-based TS line (column deliberately 0). */
+  /** Map a 0-based JS line/column back to the original 1-based TS line/column.
+   * The source map consumer reports 0-based columns; DAP columns are 1-based,
+   * so we report column 1 (the consumer's column is not reliable for TS→JS
+   * mappings and 0 reads as "unknown" to many clients). */
   originalLocation(jsLine0: number, jsCol0 = 0): OriginalPosition {
     const result = this.consumer.originalPositionFor({
       line: jsLine0 + 1,
       column: Math.max(0, jsCol0),
       bias: SourceMapConsumer.GREATEST_LOWER_BOUND,
     });
-    if (result.line === null) return { source: this.selectedSource, line: jsLine0 + 1, column: 0 };
-    return { source: result.source, line: result.line, column: 0 };
+    if (result.line === null) return { source: this.selectedSource, line: jsLine0 + 1, column: 1 };
+    return { source: result.source, line: result.line, column: 1 };
   }
 
   originalSources(): string[] {
@@ -106,7 +109,7 @@ export class NoopSourceMap {
   }
 
   originalLocation(jsLine0: number, _jsCol0 = 0): OriginalPosition {
-    return { source: '<unmapped>', line: jsLine0 + 1, column: 0 };
+    return { source: '<unmapped>', line: jsLine0 + 1, column: 1 };
   }
 
   originalSources(): string[] {

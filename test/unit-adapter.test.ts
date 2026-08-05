@@ -1,3 +1,7 @@
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve as resolvePath } from 'node:path';
+
 import { test, expect } from 'bun:test';
 import { PassThrough } from 'node:stream';
 import type { PausedEvent } from '../src/inspector/jsc-types';
@@ -524,3 +528,38 @@ test('L1: stderr scrape emits pre-URL bytes once and keeps same-chunk remainder'
   // forwards each byte once, preserving verbatim spacing.
   expect(out, 'pre-URL + same-chunk remainder, each byte once').toBe('pre-one pre-two  remainder');
 }, 10_000);
+
+test('L2: stackTrace reports column >= 1 for source-mapped frames', async () => {
+  const mock = new MockInspector();
+  const { host } = recordingHost();
+  armCounter(mock, 'bp');
+  mock.reply('Debugger.resume', undefined);
+  const { adapter } = await mountAdapter(mock, host);
+
+  // Build a real inline source map from the sample fixture, like
+  // port.sourcemap.test.ts does, so originalLocation returns a real
+  // mapped position (not a NoopSourceMap identity).
+  const fixture = resolvePath(import.meta.dir, 'fixtures/sample.ts');
+  const dir = mkdtempSync(join(tmpdir(), 'bun-dap-l2-'));
+  const outfile = join(dir, 'sample.js');
+  const proc = Bun.spawnSync(['bun', 'build', fixture, '--sourcemap=inline', '--outfile', outfile]);
+  expect(proc.exitCode, proc.stderr.toString()).toBe(0);
+  const js = readFileSync(outfile, 'utf8');
+  rmSync(dir, { recursive: true, force: true });
+  const m = /\/\/[#@]\s*sourceMappingURL=(\S+)/.exec(js);
+  const mapUrl = m?.[1] ?? '';
+  expect(mapUrl, 'inline sourceMappingURL present').not.toBe('');
+
+  mock.emit('Debugger.scriptParsed', { scriptId: 's1', url: fixture, startLine: 0, startColumn: 0, sourceMapURL: mapUrl });
+  await adapter.setBreakpoints({ source: { path: fixture }, breakpoints: [{ line: 1 }] });
+  await adapter.configurationDone();
+  // Pause at generated line 0 (the first statement).
+  mock.emit('Debugger.paused', makePause(0, 'Breakpoint', { breakpoints: ['bp1'] }));
+  await delay(50);
+
+  const { stackFrames } = await adapter.stackTrace({ threadId: 1, startFrame: 0 });
+  expect(stackFrames.length, 'a frame is reported').toBe(1);
+  // Pre-fix: source-mapped frames reported column 0 (DAP columns are 1-based;
+  // 0 means "unknown" to many clients, who then misplace the cursor).
+  expect(stackFrames[0]!.column, 'source-mapped frame column >= 1').toBeGreaterThanOrEqual(1);
+}, 15_000);

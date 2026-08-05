@@ -68,6 +68,6 @@ describe('NoopSourceMap', () => {
     const orig = map.originalLocation(3, 0);
     expect(orig.source).toBe('<unmapped>');
     expect(orig.line).toBe(4);
-    expect(orig.column).toBe(0);
+    expect(orig.column).toBe(1);
   });
 });
