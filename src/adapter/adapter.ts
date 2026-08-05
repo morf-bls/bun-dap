@@ -256,58 +256,67 @@ export class BunDebugAdapter {
     this.launchedChild = child;
 
 
-    // Discover the inspector URL on stderr (first match wins; the banner bytes
-    // containing the URL are dropped, everything else is forwarded as output).
-    let stderrChunks: Buffer[] = [];
-    let foundUrl: string | null = null;
-    let urlResolve: ((url: string) => void) | null = null;
-    const urlPromise = new Promise<string>((resolveUrl, rejectUrl) => {
-      const deadline = setTimeout(() => {
-        rejectUrl(new Error(`could not find Bun inspector URL on stderr; got: ${Buffer.concat(stderrChunks).toString('utf8').slice(-2048)}`));
-      }, 10_000);
-      child.once('exit', () => {
-        if (!foundUrl) {
+    try {
+      // Discover the inspector URL on stderr (first match wins; the banner
+      // bytes containing the URL are dropped, everything else is forwarded
+      // as output).
+      const stderrChunks: Buffer[] = [];
+      let foundUrl: string | null = null;
+      let urlResolve: ((url: string) => void) | null = null;
+      const urlPromise = new Promise<string>((resolveUrl, rejectUrl) => {
+        const deadline = setTimeout(() => {
+          rejectUrl(new Error(`could not find Bun inspector URL on stderr; got: ${Buffer.concat(stderrChunks).toString('utf8').slice(-2048)}`));
+        }, 10_000);
+        child.once('exit', () => {
+          if (!foundUrl) {
+            clearTimeout(deadline);
+            rejectUrl(new Error(`debuggee exited before inspector connected; stderr: ${Buffer.concat(stderrChunks).toString('utf8').slice(-2048)}`));
+          }
+        });
+        urlResolve = (u) => {
+          foundUrl = u;
           clearTimeout(deadline);
-          rejectUrl(new Error(`debuggee exited before inspector connected; stderr: ${Buffer.concat(stderrChunks).toString('utf8').slice(-2048)}`));
-        }
+          resolveUrl(u);
+        };
       });
-      urlResolve = (u) => {
-        foundUrl = u;
-        clearTimeout(deadline);
-        resolveUrl(u);
-      };
-    });
-    const childStderr = child.stderr;
-    if (childStderr) {
-      childStderr.on('data', (chunk: Buffer) => {
-        stderrChunks.push(chunk);
-        const text = Buffer.concat(stderrChunks).toString('utf8');
-        const m = URL_RE.exec(text);
-        if (m) {
-          const prefix = text.slice(0, m.index);
-          stderrChunks = [Buffer.from(text.slice(m.index + m[0].length))];
-          if (prefix) this.emitOutput('stderr', prefix);
-          urlResolve?.(m[0]);
-          return;
-        }
-        if (Buffer.concat(stderrChunks).length > 4096) {
-          stderrChunks = [Buffer.concat(stderrChunks).subarray(-1024)];
-        }
-        if (Buffer.concat(stderrChunks).length > 4096) {
-          stderrChunks = [Buffer.concat(stderrChunks).subarray(-1024)];
-        }
-        // Once the URL is found, forwardOutput() takes over; don't double-emit.
-        if (!foundUrl) this.emitOutput('stderr', chunk.toString('utf8'));
-      });
+      const childStderr = child.stderr;
+      if (childStderr) {
+        childStderr.on('data', (chunk: Buffer) => {
+          stderrChunks.push(chunk);
+          const text = Buffer.concat(stderrChunks).toString('utf8');
+          const m = URL_RE.exec(text);
+          if (m) {
+            const prefix = text.slice(0, m.index);
+            stderrChunks.length = 0;
+            stderrChunks.push(Buffer.from(text.slice(m.index + m[0].length)));
+            if (prefix) this.emitOutput('stderr', prefix);
+            urlResolve?.(m[0]);
+            return;
+          }
+          if (Buffer.concat(stderrChunks).length > 4096) {
+            const tail = Buffer.concat(stderrChunks).subarray(-1024);
+            stderrChunks.length = 0;
+            stderrChunks.push(tail);
+          }
+          // Once the URL is found, forwardOutput() takes over; don't double-emit.
+          if (!foundUrl) this.emitOutput('stderr', chunk.toString('utf8'));
+        });
+      }
+      const inspectorUrl = await urlPromise;
+      this.forwardOutput(child);
+      this.inspector = new WebSocketInspector(inspectorUrl);
+      this.inspector.on('error', (err) => this.diagnostic(`inspector: ${err.message}`));
+      await this.awaitConnected(this.inspector);
+      await this.attachInspector();
+    } catch (err) {
+      // The debuggee was spawned but launch failed (no inspector URL, connect
+      // refused, attach error): kill the orphaned child so it does not outlive
+      // the failed launch and leak. Clear launchedChild before kill so the
+      // exit handler does not fire a spurious onChildExit.
+      this.launchedChild = null;
+      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+      throw err;
     }
-
-    const inspectorUrl = await urlPromise;
-    this.forwardOutput(child);
-    this.inspector = new WebSocketInspector(inspectorUrl);
-    this.inspector.on('error', (err) => this.diagnostic(`inspector: ${err.message}`));
-    await this.awaitConnected(this.inspector);
-    await this.attachInspector();
-
     child.on('exit', (code) => this.onChildExit(code));
   }
 

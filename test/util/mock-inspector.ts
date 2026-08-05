@@ -103,6 +103,7 @@ interface AdapterTestSeam {
   entryBreakpointUrl: string | null;
   placeholderJscIds: Set<string>;
   placeholderAlias: Map<string, string>;
+  launchedChild: unknown;
 }
 
 /**

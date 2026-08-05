@@ -315,3 +315,27 @@ test('M3: aliased entry-bp placeholder reports bp stop, keeps entry bp for entry
   expect(seam.entryBreakpointId, 'entry bp cleared after entry stop').toBeUndefined();
   expect(seam.firstPausePending, 'firstPausePending cleared after entry stop').toBe(false);
 }, 10_000);
+
+test('M7: failed launch kills orphaned debuggee and clears launchedChild', async () => {
+  const mock = new MockInspector();
+  const { host } = recordingHost();
+  const { adapter, seam } = await mountAdapter(mock, host);
+
+  // Launch with a nonexistent runtime: spawn succeeds (Bun spawn returns a
+  // child even for a bad binary), the child exits immediately, urlPromise
+  // rejects ("debuggee exited before inspector connected"). Pre-fix the child
+  // was orphaned (launchedChild kept); the fix kills it and clears the ref.
+  let threw = false;
+  try {
+    await adapter.launch({
+      program: ABS_PATH,
+      cwd: '/tmp',
+      runtime: '/nonexistent/bun-runtime',
+      noDebug: false,
+    });
+  } catch {
+    threw = true;
+  }
+  expect(threw, 'launch with bad runtime throws').toBe(true);
+  expect(seam.launchedChild, 'launchedChild cleared after failed launch').toBeNull();
+}, 15_000);
