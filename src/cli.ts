@@ -13,13 +13,26 @@ if (argv.length === 0) {
   DebugSession.run(BunDapSession);
 } else {
   // TCP server mode: `bun run src/cli.ts <port> [host]`.
-  const port = parseInt(argv[0] ?? '', 10);
+  const port = Number(argv[0]);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    process.stderr.write(`usage: bun run src/cli.ts <port 1-65535> [host]\n`);
+    process.exit(1);
+  }
   const host = argv[1] ?? '127.0.0.1';
   const server = createServer((socket) => {
     const session = new BunDapSession();
     session.setRunAsServer(true); // don't exit the process when this socket closes
     session.start(socket, socket); // ProtocolServer.start binds Content-Length framing
-    socket.on('close', () => session.stop());
+    // M8: a dropped connection (client killed without disconnect) would orphan
+    // the launched debuggee — terminate it before stopping the session.
+    socket.on('close', () => {
+      try { void session.terminateDebuggee(); } catch { /* already gone */ }
+      session.stop();
+    });
+  });
+  server.on('error', (err) => {
+    process.stderr.write(`bun-dap: server error: ${err.message}\n`);
+    process.exit(1);
   });
   server.listen(port, host, () => {
     process.stderr.write(`bun-dap listening on ${host}:${port}\n`);

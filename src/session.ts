@@ -21,6 +21,7 @@ export class BunDapSession extends LoggingDebugSession {
   private adapter: BunDebugAdapter | null = null;
   private clientSupportsConfigurationDone = true;
   private mode: 'launch' | 'attach' | null = null;
+  private gracefulDisconnect = false;
 
   constructor() {
     super();
@@ -88,7 +89,7 @@ export class BunDapSession extends LoggingDebugSession {
       supportsEvaluateForHovers: true,
       exceptionBreakpointFilters: [
         { filter: 'all', label: 'All Exceptions', default: false },
-        { filter: 'uncaught', label: 'Uncaught Exceptions (mapped to all — JSC limitation)', default: false },
+        { filter: 'uncaught', label: 'Uncaught Exceptions', default: false },
       ],
       supportsTerminateRequest: true,
       supportTerminateDebuggee: true,
@@ -137,7 +138,7 @@ export class BunDapSession extends LoggingDebugSession {
 
   protected async terminateRequest(response: DebugProtocol.TerminateResponse): Promise<void> {
     try {
-      if (this.mode === 'launch') await this.adapter?.terminateDebuggee();
+      await this.adapter?.terminateDebuggee();
     } catch {
       // child already gone
     }
@@ -145,6 +146,7 @@ export class BunDapSession extends LoggingDebugSession {
   }
 
   protected async disconnectRequest(response: DebugProtocol.DisconnectResponse, args: DebugProtocol.DisconnectArguments): Promise<void> {
+    this.gracefulDisconnect = true;
     const adapter = this.adapter;
     if (adapter) {
       try {
@@ -301,5 +303,32 @@ export class BunDapSession extends LoggingDebugSession {
       // already paused
     }
     this.sendResponse(response);
+  }
+
+  /** M8 (TCP): exposed so cli.ts can terminate the debuggee on socket close. */
+  terminateDebuggee(): void {
+    const adapter = this.adapter;
+    if (adapter) {
+      try { void adapter.terminateDebuggee(); } catch { /* already gone */ }
+    }
+  }
+
+  /**
+   * M8 (stdio): when the transport drops without a disconnect (client killed,
+   * stdio closed), the SDK's shutdown exits the process — the launched
+   * debuggee would be orphaned. Terminate it first so it does not outlive
+   * the lost connection.
+   */
+  shutdown(): void {
+    // shutdown() runs on BOTH graceful disconnect (disconnectRequest already
+    // handled termination) and transport loss. Only terminate the debuggee
+    // for the ungraceful case so we don't race the natural exit flow.
+    if (!this.gracefulDisconnect) {
+      const adapter = this.adapter;
+      if (adapter) {
+        try { void adapter.terminateDebuggee(); } catch { /* already gone */ }
+      }
+    }
+    super.shutdown();
   }
 }
