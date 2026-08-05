@@ -145,6 +145,12 @@ export class BunDapSession extends LoggingDebugSession {
       }
       adapter.closeInspector();
     }
+    // A1: drop the cached adapter so a subsequent launch/attach on the SAME
+    // connection builds a fresh one. Pre-fix the stale adapter kept
+    // configDoneSent=true, so configurationDone() no-oped, the --inspect-wait
+    // gate never reopened, and the second debuggee hung forever.
+    this.adapter = null;
+    this.mode = null;
     this.sendResponse(response);
   }
 
