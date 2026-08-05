@@ -164,6 +164,54 @@ test('e2e: attach disconnect with terminateDebuggee kills the target', async () 
   }
 }, 30_000);
 
+test('e2e: B2b attach-mode terminate request kills the target', async () => {
+  // M6 regression guard: the `terminate` request (not disconnect) in attach
+  // mode must kill the attached target. adapter-control.test.ts:301 sends
+  // `terminate` in launch mode; the test above sends disconnect with
+  // terminateDebuggee in attach mode. Neither hits the exact path: terminate
+  // request → attach mode → kill target.
+  const httpPort = await getAvailablePort();
+  const inspectPort = await getAvailablePort();
+  const child = Bun.spawn(['bun', `--inspect-wait=127.0.0.1:${inspectPort}`, serverFixture], {
+    cwd: import.meta.dir,
+    stdout: 'pipe',
+    stderr: 'pipe',
+    stdin: 'ignore',
+    env: { ...process.env, PORT: String(httpPort) },
+  });
+  const client = connectStdio();
+  try {
+    const url = await scrapeInspectorUrl(child);
+    const init = await client.send('initialize', { adapterID: 'bun-dap-test', pathFormat: 'path' });
+    expect(init.success, init.message).toBe(true);
+    const attach = await client.send('attach', { url });
+    expect(attach.success, attach.message).toBe(true);
+    await client.waitForEvent('initialized');
+
+    // Release the --inspect-wait gate so the debuggee actually runs.
+    const exc = await client.send('setExceptionBreakpoints', { filters: [] });
+    expect(exc.success).toBe(true);
+    const done = await client.send('configurationDone', {});
+    expect(done.success).toBe(true);
+    expect(await probeServer(`http://127.0.0.1:${httpPort}/up`)).toBe('ok');
+
+    // The `terminate` request (not disconnect) in attach mode must kill the
+    // attached process via process.pid resolved over the inspector.
+    const term = await client.send('terminate', {});
+    expect(term.success, term.message).toBe(true);
+    await Promise.race([
+      child.exited,
+      Bun.sleep(10_000).then(() => {
+        throw new Error('attached target survived terminate request');
+      }),
+    ]);
+    expect(await probeServer(`http://127.0.0.1:${httpPort}/dead`)).toBe('never');
+  } finally {
+    client.close();
+    child.kill();
+  }
+}, 30_000);
+
 test('e2e: attach mode emits exited+terminated when the debuggee exits', async () => {
   // hello.ts runs to completion on its own. Attach mode has no child
   // handle, so the inspector socket close is the only exit signal — a
