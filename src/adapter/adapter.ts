@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
-import { resolve, basename } from 'node:path';
+import { resolve, basename, isAbsolute } from 'node:path';
 import { Handles } from '@vscode/debugadapter';
 import type { DebugProtocol } from '@vscode/debugprotocol';
 import { WebSocketInspector } from '../inspector/websocket-inspector';
@@ -1297,7 +1297,7 @@ export class BunDebugAdapter {
         line = orig.line;
         column = orig.column;
       }
-      const internal = sourcePath === '' || !sourcePath.startsWith('/');
+      const internal = sourcePath === '' || !isAbsolute(sourcePath);
       stackFrames.push({
         id,
         name: frame.functionName || (internal ? '<internal>' : '<anonymous>'),
