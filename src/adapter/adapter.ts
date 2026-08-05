@@ -8,6 +8,7 @@ import { formatRemoteObject } from '../inspector/preview';
 import type { BreakpointResolvedEvent, CallFrame, CallFrameId, PausedEvent, RemoteObject, ScriptParsedEvent, SetBreakpointByUrlParams } from '../inspector/jsc-types';
 import { SourceMap, NoopSourceMap, type AnySourceMap } from '../sourcemap';
 import { getAvailablePort } from '../util/port';
+import { isLoopbackHost } from '../util/loopback';
 
 // ---------------------------------------------------------------------------
 // Host interface — the session supplies these by constructing DAP events.
@@ -1454,7 +1455,7 @@ export class BunDebugAdapter {
     }
     if (this.mode !== 'attach' || this.attachHost === null || !this.inspector?.isConnected) return;
     const h = this.attachHost;
-    if (h !== '127.0.0.1' && h !== 'localhost' && h !== '::1' && h !== '[::1]') {
+    if (!isLoopbackHost(h)) {
       throw new Error(`attach: terminateDebuggee is only supported for loopback targets (got ${h})`);
     }
     const res = await this.inspector.send('Runtime.evaluate', { expression: 'process.pid', returnByValue: true, silent: true });
