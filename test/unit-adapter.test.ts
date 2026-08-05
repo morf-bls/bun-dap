@@ -70,3 +70,92 @@ test('L24: every logpoint sharing a pause emits its message (not just the first)
   expect(consoleOutputs.length, 'both logpoints should emit console output').toBe(2);
   expect(log.stopped.length, 'logpoints never stop').toBe(0);
 }, 10_000);
+
+test('H1: aliased placeholder consume re-arms the real bp so later passes hit', async () => {
+  const mock = new MockInspector();
+  const { host, log } = recordingHost();
+  // setBreakpointByUrl: a line-0 call is the placeholder (id "ph1", no
+  // resolved location yet); a bp arm at a real line gets a distinct id.
+  let bpArmN = 0;
+  mock.handle('Debugger.setBreakpointByUrl', (params) => {
+    const ln = (params as { lineNumber: number }).lineNumber;
+    if (ln === 0) return { breakpointId: 'ph1', locations: [] };
+    bpArmN++;
+    return { breakpointId: `real${bpArmN}`, locations: [{ scriptId: 's1', lineNumber: ln, columnNumber: 0 }] };
+  });
+  mock.reply('Debugger.resume', undefined);
+  const { adapter } = await mountAdapter(mock, host);
+
+  const LINE = 3;
+  // Deferred bp (script not parsed) → placeholder "ph1" armed, pending key registered.
+  await adapter.setBreakpoints({ source: { path: ABS_PATH }, breakpoints: [{ line: LINE }] });
+  // Script parses → deferred bp arms at LINE-1 (NoopSourceMap identity).
+  mock.emit('Debugger.scriptParsed', { scriptId: 's1', url: ABS_PATH, startLine: 0, startColumn: 0 });
+  // Placeholder resolves to the bp's line → alias set (NoopSourceMap: line-only match).
+  mock.emit('Debugger.breakpointResolved', {
+    breakpointId: 'ph1',
+    location: { scriptId: 's1', lineNumber: LINE - 1, columnNumber: 0 },
+  });
+  // No pending left (scriptParsed consumed it) → configurationDone arms no brake.
+  await adapter.configurationDone();
+  // The aliased placeholder's pause: data.breakpointId = "ph1".
+  mock.emit('Debugger.paused', makePause(LINE - 1, 'Breakpoint', { breakpointId: 'ph1' }));
+  await delay(50);
+
+  // The alias-consume path must removeBreakpoint("ph1") AND re-arm the real
+  // bp (a new setBreakpointByUrl at LINE-1) while still paused, so later
+  // passes hit. Pre-fix: only the original arm — no re-arm — so JSC's dedup
+  // (one location, two ids) left nothing armed after the placeholder removal.
+  const bpArms = mock.sent.filter(
+    (s) => s.method === 'Debugger.setBreakpointByUrl' && (s.params as { lineNumber: number }).lineNumber === LINE - 1,
+  );
+  expect(bpArms.length, 'real bp re-armed after alias consume').toBe(2);
+  const removes = mock.sent.filter(
+    (s) => s.method === 'Debugger.removeBreakpoint' && (s.params as { breakpointId: string }).breakpointId === 'ph1',
+  );
+  expect(removes.length, 'placeholder disarmed on alias consume').toBe(1);
+  expect(log.stopped.length).toBe(1);
+  expect(log.stopped[0]!.reason).toBe('breakpoint');
+}, 10_000);
+
+test('M2: in-flight arm orphaned by setBreakpoints replacement is removed', async () => {
+  const mock = new MockInspector();
+  const { host } = recordingHost();
+  const removed: string[] = [];
+  let armResolve: (() => void) | undefined;
+  // Placeholder arms immediately; the real (deferred) arm stalls so we can
+  // race a full-replacement setBreakpoints through while it is in flight.
+  mock.handle('Debugger.setBreakpointByUrl', (params) => {
+    if (params && typeof params === 'object' && 'lineNumber' in params) {
+      const ln = (params as { lineNumber: number }).lineNumber;
+      if (ln === 0) return { breakpointId: 'ph1', locations: [] };
+      // Real arm: hold until the test releases it.
+      const { promise, resolve } = Promise.withResolvers<{ breakpointId: string; locations: Array<{ scriptId: string; lineNumber: number; columnNumber: number }> }>();
+      armResolve = () => resolve({ breakpointId: 'real1', locations: [{ scriptId: 's1', lineNumber: ln, columnNumber: 0 }] });
+      return promise;
+    }
+    return { breakpointId: 'real1', locations: [] };
+  });
+  mock.reply('Debugger.resume', undefined);
+  mock.handle('Debugger.removeBreakpoint', (params) => { if (params && typeof params === 'object' && 'breakpointId' in params) removed.push((params as { breakpointId: string }).breakpointId); return undefined; });
+  const { adapter } = await mountAdapter(mock, host);
+
+  const LINE = 3;
+  // Deferred bp (script not parsed) → placeholder "ph1", pending registered.
+  await adapter.setBreakpoints({ source: { path: ABS_PATH }, breakpoints: [{ line: LINE }] });
+  // Script parses → onScriptParsed fires the real arm (stalled in flight).
+  mock.emit('Debugger.scriptParsed', { scriptId: 's1', url: ABS_PATH, startLine: 0, startColumn: 0 });
+  await delay(10); // let the arm RPC enter its await
+
+  // Full replacement: clears the bp while its arm RPC is still in flight.
+  // bp.jscBreakpointId is still undefined, so the replacement removes nothing
+  // from JSC — the about-to-resolve arm would orphan a JSC bp (real1) with no
+  // DAP bp referencing it.
+  await adapter.setBreakpoints({ source: { path: ABS_PATH }, breakpoints: [] });
+
+  // Release the in-flight arm; the liveness re-check must dispose the orphan.
+  armResolve!();
+  await delay(20);
+
+  expect(removed, 'orphaned arm bp removed after liveness re-check').toContain('real1');
+}, 10_000);

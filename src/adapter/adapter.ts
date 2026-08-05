@@ -685,6 +685,15 @@ export class BunDebugAdapter {
     if (map instanceof SourceMap) params.columnNumber = gen.column - 1;
     try {
       const result = await this.requireInspector().send('Debugger.setBreakpointByUrl', params);
+      // Liveness re-check: a full-replacement setBreakpoints (or any path
+      // that clears the bp) can race this await. If the slot now holds a
+      // different bp (or is empty), the JSC bp we just armed is orphaned —
+      // nothing in lineBreakpoints references it. Dispose it and bail before
+      // stamping the id, so no stale jscToDapKey entry is left either.
+      if (this.lineBreakpoints.get(key) !== bp) {
+        this.requireInspector().send('Debugger.removeBreakpoint', { breakpointId: result.breakpointId }).catch(() => {});
+        return;
+      }
       bp.jscBreakpointId = result.breakpointId;
       this.jscToDapKey.set(result.breakpointId, key);
       if (!bp.verified && result.locations.length > 0) {
