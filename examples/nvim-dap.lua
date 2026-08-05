@@ -15,6 +15,10 @@ dap.adapters.bun = {
 
 dap.configurations.typescript = {
   {
+    type = 'bun', request = 'launch', name = 'Launch Bun',
+    program = '${file}', cwd = '${workspaceFolder}',
+  },
+  {
     type = 'bun',
     request = 'attach',  -- prerequisite: start the target with `bun --inspect-wait=127.0.0.1:6499/debugme`
     name = 'Attach to Bun',
