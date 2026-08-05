@@ -104,6 +104,8 @@ interface AdapterTestSeam {
   placeholderJscIds: Set<string>;
   placeholderAlias: Map<string, string>;
   launchedChild: unknown;
+  mode: 'launch' | 'attach' | null;
+  attachHost: string | null;
 }
 
 /**

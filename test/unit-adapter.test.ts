@@ -421,3 +421,29 @@ test('L9: condition truthiness: symbol always stops', async () => {
   await delay(50);
   expect(log.stopped.length, 'symbol condition should stop').toBe(1);
 }, 10_000);
+
+test('L16: terminateDebuggee accepts IPv6 loopback [::1]', async () => {
+  const mock = new MockInspector();
+  const { host } = recordingHost();
+  const { adapter, seam } = await mountAdapter(mock, host);
+
+  // Simulate attach mode with an IPv6 loopback target. Bun's URL.hostname
+  // returns the bracketed form "[::1]", which the old loopback check
+  // (only "::1") never matched, refusing termination.
+  seam.mode = 'attach';
+  seam.attachHost = '[::1]';
+  // Runtime.evaluate resolves a fake pid; process.kill on 999999 throws
+  // ESRCH (caught), so terminateDebuggee resolves without side effects.
+  mock.reply('Runtime.evaluate', { result: { type: 'number', value: 999999 }, wasThrown: false });
+
+  let threw = false;
+  let msg = '';
+  try {
+    await adapter.terminateDebuggee();
+  } catch (err) {
+    threw = true;
+    msg = (err as Error).message;
+  }
+  expect(threw, 'should not throw loopback refusal for [::1]').toBe(false);
+  expect(msg, '').toBe('');
+}, 10_000);

@@ -1362,8 +1362,9 @@ export class BunDebugAdapter {
       return;
     }
     if (this.mode !== 'attach' || this.attachHost === null || !this.inspector?.isConnected) return;
-    if (this.attachHost !== '127.0.0.1' && this.attachHost !== 'localhost' && this.attachHost !== '::1') {
-      throw new Error(`attach: terminateDebuggee is only supported for loopback targets (got ${this.attachHost})`);
+    const h = this.attachHost;
+    if (h !== '127.0.0.1' && h !== 'localhost' && h !== '::1' && h !== '[::1]') {
+      throw new Error(`attach: terminateDebuggee is only supported for loopback targets (got ${h})`);
     }
     const res = await this.inspector.send('Runtime.evaluate', { expression: 'process.pid', returnByValue: true, silent: true });
     const pid = typeof res.result?.value === 'number' ? res.result.value : undefined;
