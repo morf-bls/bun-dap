@@ -151,17 +151,6 @@ test('e2e: launch hello.ts, breakpoint, stack, scopes, variables, evaluate, cont
   }
 }, 30_000);
 
-// Regression test for the deferred-breakpoint misalignment (fixed): Bun
-// resolves URL-keyed breakpoints against GENERATED JS coordinates, not TS
-// lines. setBreakpoints used to arm deferred (pre-parse) bps at `bp.line - 1`
-// — a TS line treated as a generated line — which lands on the wrong statement
-// as soon as the generated layout diverges from the TS source (the 9-line
-// comment header below, or Bun's statement merging/inlining accumulating
-// across a file). The fix defers the arm to the source's scriptParsed (whose
-// map is decoded synchronously, matching bun's own bun-debug-adapter-protocol)
-// and freezes the VM with a one-shot pre-gate Debugger.pause so the mapped
-// arm always lands before the module body runs; if the bp's target IS that
-// first executed statement, the brake's pause stands in for the hit.
 test('e2e: stackTrace without levels returns all frames (nvim-dap omits it)', async () => {
   const client = connectStdio();
   try {
@@ -186,16 +175,22 @@ test('e2e: stackTrace without levels returns all frames (nvim-dap omits it)', as
   }
 }, 30_000);
 
+// Regression test for the deferred-breakpoint misalignment (fixed): Bun
+// resolves URL-keyed breakpoints against GENERATED JS coordinates, not TS
+// lines. setBreakpoints used to arm deferred (pre-parse) bps at `bp.line - 1`
+// — a TS line treated as a generated line — which lands on the wrong statement
+// as soon as the generated layout diverges from the TS source (the 9-line
+// comment header below, or Bun's statement merging/inlining accumulating
+// across a file). The fix defers the arm to the source's scriptParsed (whose
+// map is decoded synchronously, matching bun's own bun-debug-adapter-protocol)
+// and freezes the VM with a one-shot pre-gate Debugger.pause so the mapped
+// arm always lands before the module body runs; if the bp's target IS that
+// first executed statement, the brake's pause stands in for the hit.
 test('e2e: deferred breakpoint behind a comment header re-arms onto the requested TS line', async () => {
   const client = connectStdio();
   try {
     await launchReady(client, offset);
-    // offset.ts has a 9-line comment header, so its generated JS layout
-    // diverges from the TS layout. Pre-fix, the deferred arm at `bp.line - 1`
-    // resolved against generated coordinates and the pause landed on a
-    // different TS statement. Post-fix the bp arms deferred at the mapped
-    // generated location and the pause must land on the requested line 13
-    // (`return sum`).
+    // offset.ts has a 9-line comment header; line 13 is `return sum`.
     await armBreakpoint(client, offset, 13);
 
     const stopped = await client.waitForEvent('stopped');

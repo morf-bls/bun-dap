@@ -145,7 +145,14 @@ export function connectStdio(): FramedClient {
     (frame) => {
       proc.stdin.write(frame);
     },
-    () => void proc.kill(),
+    () => {
+      // Send a graceful disconnect so the session tears down the debuggee
+      // via disconnectRequest (not the transport-loss shutdown path),
+      // then kill the process. Without this the launched child can leak
+      // and the session's shutdown() races the natural exit flow.
+      try { void client.send('disconnect', {}).catch(() => {}); } catch { /* already closed */ }
+      setTimeout(() => void proc.kill(), 100);
+    },
   );
   void (async () => {
     try {
