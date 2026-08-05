@@ -159,3 +159,52 @@ test('M2: in-flight arm orphaned by setBreakpoints replacement is removed', asyn
 
   expect(removed, 'orphaned arm bp removed after liveness re-check').toContain('real1');
 }, 10_000);
+
+test('M9: placeholder pause via data.breakpoints is swallowed', async () => {
+  const mock = new MockInspector();
+  const { host, log } = recordingHost();
+  mock.reply('Debugger.setBreakpointByUrl', { breakpointId: 'ph1', locations: [] });
+  mock.reply('Debugger.removeBreakpoint', undefined);
+  mock.reply('Debugger.resume', undefined);
+  const { adapter, seam } = await mountAdapter(mock, host);
+
+  // Deferred bp → placeholder "ph1" armed.
+  await adapter.setBreakpoints({ source: { path: ABS_PATH }, breakpoints: [{ line: BP_LINE }] });
+  await adapter.configurationDone();
+  // Clear brakePending so the brake branch does not run — the swallow must
+  // come from the placeholder path testing data.breakpoints, not the brake.
+  seam.brakePending = false;
+  // Placeholder pause: JSC reports the id under data.breakpoints (array),
+  // NOT data.breakpointId. The placeholder is non-aliased (no
+  // breakpointResolved at this line), so it must be swallowed, not surfaced.
+  mock.emit('Debugger.paused', makePause(BP_LINE - 1, 'Breakpoint', { breakpoints: ['ph1'] }));
+  await delay(50);
+
+  expect(log.stopped.length, 'non-aliased placeholder pause swallowed').toBe(0);
+  expect(seam.brakePending, 'brakePending untouched').toBe(false);
+}, 10_000);
+
+test('M1: brake does not swallow an exception pause while brakePending', async () => {
+  const mock = new MockInspector();
+  const { host, log } = recordingHost();
+  // A real bp at BP_LINE arms so a 'Breakpoint' pause would join gating,
+  // but this test emits an 'exception' pause — the brake branch must NOT
+  // treat it as the brake's (only PauseOnNextStatement/'other' qualify),
+  // so it is processed normally and STOPPED, with brakePending kept true.
+  armCounter(mock, 'bp');
+  mock.reply('Debugger.resume', undefined);
+  const { adapter, seam } = await mountAdapter(mock, host);
+  // Mark brakePending manually (configurationDone's Debugger.pause is the
+  // normal setter; here we simulate a brake armed then an exception fires
+  // before the brake's own pause arrives).
+  seam.brakePending = true;
+
+  mock.emit('Debugger.paused', makePause(BP_LINE - 1, 'exception', { exceptionData: { type: 'string', value: 'boom' } }));
+  await delay(50);
+
+  // Pre-fix: the brake branch swallowed any pause while brakePending,
+  // including the exception, hiding it from the client.
+  expect(log.stopped.length, 'exception pause not swallowed by brake').toBe(1);
+  expect(log.stopped[0]!.reason, 'exception surfaced as exception').toBe('exception');
+  expect(seam.brakePending, 'brakePending preserved across non-brake pause').toBe(true);
+}, 10_000);

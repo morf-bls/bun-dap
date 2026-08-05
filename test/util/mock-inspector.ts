@@ -97,6 +97,7 @@ export function recordingHost(): { host: AdapterHost; log: HostLog } {
 interface AdapterTestSeam {
   inspector: unknown;
   attachInspector(): Promise<void>;
+  brakePending: boolean;
 }
 
 /**

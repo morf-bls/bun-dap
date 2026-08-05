@@ -542,10 +542,16 @@ export class BunDebugAdapter {
       // attach too: pendingByPath non-empty at configurationDone implies the
       // --inspect-wait gate still holds, so the same pre-gate pause is safe.
       if (this.pendingByPath.size > 0) {
+        // Set brakePending BEFORE the await: the brake's pause can arrive
+        // the instant Debugger.pause resolves, and onPaused reads this flag
+        // to decide swallow-vs-stop. Setting it after the await would miss a
+        // pause that lands between resolve and the assignment. Clear it only
+        // if the pause call itself rejects (then no brake pause will come).
+        this.brakePending = true;
         try {
           await inspector.send('Debugger.pause');
-          this.brakePending = true;
         } catch (err) {
+          this.brakePending = false;
           this.diagnostic(`entry brake failed: ${(err as Error).message}`);
         }
       }
@@ -926,14 +932,14 @@ export class BunDebugAdapter {
     // bp targets THIS statement, the pause is that bp's hit — a bp bound at
     // the pause location does not re-fire once resumed — so its keys join the
     // normal gating below and the stop reports as 'breakpoint'. Otherwise the
-    // brake is internal machinery: resume silently — unless stopOnEntry is
-    // still owed AND the pause is inside the entry file (when the process has
-    // imports, the first executed statement lives in a builtin initializer
-    // like node:path — a pause there has no user source and clients show
-    // "stopped at unavailable location"; the entry stop then comes from the
-    // entry bp).
     let brakeKeys: string[] = [];
-    if (this.brakePending) {
+    // M1: only treat the pause as the entry brake's when JSC reports it as
+    // the brake's own reason (PauseOnNextStatement, or 'other' when stepping
+    // from a bp pause). A Breakpoint/exception/FunctionCall pause arriving
+    // while brakePending is a genuine hit that raced the brake's own pause —
+    // process it normally and KEEP brakePending so the real brake pause still
+    // gets its swallow/stop decision when it arrives.
+    if (this.brakePending && (params.reason === 'PauseOnNextStatement' || params.reason === 'other')) {
       this.brakePending = false;
       brakeKeys = this.brakeOverlapKeys();
       const topFrame = this.currentCallFrames[0];
@@ -957,15 +963,26 @@ export class BunDebugAdapter {
     // eat the entry stop; fall through so it surfaces as 'entry' (the
     // entry-bp disarm below also runs, once).
     let hitKeysAlias: string[] = [];
-    const pauseId = typeof data?.breakpointId === 'string' ? data.breakpointId : undefined;
-    if (pauseId !== undefined && this.placeholderJscIds.has(pauseId)) {
-      const aliasKey = this.placeholderAlias.get(pauseId);
-      if (aliasKey !== undefined) {
-        this.placeholderAlias.delete(pauseId);
+    // M9: JSC reports the hit id variably (data.breakpoints array OR a single
+    // data.breakpointId string). Test EVERY id for placeholder membership,
+    // not just data.breakpointId — a placeholder pause reported via the
+    // array form was slipping past this block and surfacing as a spurious
+    // stop. Aliased ids join gating; non-aliased ones are swallowed unless
+    // the entry stop is still owed here.
+    const placeholderIds = hitIds.filter((id) => this.placeholderJscIds.has(id));
+    if (placeholderIds.length > 0) {
+      let aliasedId: string | undefined;
+      let aliasKey: string | undefined;
+      for (const id of placeholderIds) {
+        const key = this.placeholderAlias.get(id);
+        if (key !== undefined) { aliasedId = id; aliasKey = key; break; }
+      }
+      if (aliasKey !== undefined && aliasedId !== undefined) {
+        this.placeholderAlias.delete(aliasedId);
         // Disarm the placeholder now that its hit has been consumed — later
         // passes of this statement must hit only the real bp. Racy by design;
         // the id stays in placeholderJscIds so a queued late pause swallows.
-        this.requireInspector().send('Debugger.removeBreakpoint', { breakpointId: pauseId }).catch(() => {});
+        this.requireInspector().send('Debugger.removeBreakpoint', { breakpointId: aliasedId }).catch(() => {});
         // Re-arm the real bp: JSC dedupes same-location breakpoints, so the
         // placeholder removal above disarmed both the placeholder AND the
         // real bp (one location, two ids). Without re-arming, later passes of
