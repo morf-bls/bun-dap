@@ -597,7 +597,10 @@ export class BunDebugAdapter {
     }
     this.configDoneSent = true;
     this.host?.sendThread('started', 1);
-    this.host?.sendProcessStarted(this.launchedChild?.pid ?? 0);
+    // A `process` event is only meaningful for launch, where the child's pid
+    // is known; in attach mode there is no launched child, so reporting it
+    // would fabricate pid 0 (L27).
+    if (this.launchedChild?.pid !== undefined) this.host?.sendProcessStarted(this.launchedChild.pid);
   }
 
   // ------------------------------------------------------------------
