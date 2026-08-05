@@ -339,3 +339,33 @@ test('M7: failed launch kills orphaned debuggee and clears launchedChild', async
   expect(threw, 'launch with bad runtime throws').toBe(true);
   expect(seam.launchedChild, 'launchedChild cleared after failed launch').toBeNull();
 }, 15_000);
+
+
+test('L5: onPaused throw is swallowed to diagnostic, not unhandled', async () => {
+  const mock = new MockInspector();
+  const { host } = recordingHost();
+  const { seam } = await mountAdapter(mock, host);
+
+  // Force onPaused to throw: a brake pause with no overlap keys and no
+  // entry owed takes the resumeInternal() early-return path. Make
+  // Debugger.resume reject so the awaited send throws inside onPaused.
+  mock.handle('Debugger.resume', () => { throw new Error('boom'); });
+  seam.brakePending = true;
+  seam.firstPausePending = false;
+
+  const origWrite = process.stderr.write.bind(process.stderr);
+  const captured: string[] = [];
+  process.stderr.write = ((chunk: string | Buffer) => {
+    captured.push(String(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    mock.emit('Debugger.paused', makePause(BP_LINE - 1, 'PauseOnNextStatement'));
+    await delay(50);
+  } finally {
+    process.stderr.write = origWrite;
+  }
+
+  // The rejection must surface as a diagnostic, not an unhandled rejection.
+  expect(captured.some((s) => s.includes('onPaused: boom'))).toBe(true);
+}, 10_000);

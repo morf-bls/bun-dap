@@ -394,7 +394,7 @@ export class BunDebugAdapter {
     await inspector.send('Debugger.setAsyncStackTraceDepth', { depth: 0 });
 
     inspector.on('Debugger.scriptParsed', (params) => this.onScriptParsed(params as ScriptParsedEvent));
-    inspector.on('Debugger.paused', (params) => void this.onPaused(params as PausedEvent));
+    inspector.on('Debugger.paused', (params) => void this.onPaused(params as PausedEvent).catch((err) => this.diagnostic(`onPaused: ${(err as Error).message}`)));
     inspector.on('Debugger.breakpointResolved', (params) => this.onBreakpointResolved(params as BreakpointResolvedEvent));
     inspector.on('Debugger.resumed', () => this.onResumed());
     // The debuggee exiting closes the inspector socket. In attach mode that
