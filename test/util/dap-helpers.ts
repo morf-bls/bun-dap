@@ -6,6 +6,7 @@ export const repoRoot = resolve(import.meta.dir, '..', '..');
 export const hello = resolve(repoRoot, 'test/fixtures/hello.ts');
 export const serverFixture = resolve(repoRoot, 'test/fixtures/server.ts');
 export const offsetFixture = resolve(repoRoot, 'test/fixtures/offset.ts');
+export const importsFixture = resolve(repoRoot, 'test/fixtures/imports.ts');
 
 export function castObject(body: unknown): Record<string, unknown> {
   if (body && typeof body === 'object') return body as Record<string, unknown>;
