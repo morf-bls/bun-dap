@@ -252,9 +252,9 @@ leaves the target running; `terminateDebuggee: true` kills it.
    `Inspector.initialized` — the gate opens and the program runs.
 4. **On `Debugger.paused`**, hit breakpoints gate on `condition`/`hitCondition`,
    logpoints print via `output` events and resume, and the stop reason is
-   mapped to DAP (`Breakpoint` → `breakpoint`, `FunctionCall` →
+   mapped to DAP (`Breakpoint`/`DebuggerStatement` → `breakpoint`, `FunctionCall` →
    `function breakpoint`, exceptions → `exception`, entry pauses → `entry`,
-   manual/debugger pauses → `pause`).
+   step completions → `step`, manual pauses → `pause`).
 5. **`stackTrace`** maps generated JS locations back through the source map, so
    frames render with TypeScript lines.
 
