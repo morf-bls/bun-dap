@@ -1,4 +1,5 @@
 import { test, expect } from 'bun:test';
+import { PassThrough } from 'node:stream';
 import type { PausedEvent } from '../src/inspector/jsc-types';
 import { MockInspector, recordingHost, mountAdapter, delay } from './util/mock-inspector';
 
@@ -500,4 +501,26 @@ test('L18: next() clears pause state when JSC omits Debugger.resumed', async () 
   await delay(20);
   expect(seam.paused, 'paused cleared after next()').toBe(false);
   expect((await adapter.stackTrace({ threadId: 1, startFrame: 0 })).stackFrames.length, 'stackTrace empty after next()').toBe(0);
+}, 10_000);
+
+test('L1: stderr scrape emits pre-URL bytes once and keeps same-chunk remainder', async () => {
+  const mock = new MockInspector();
+  const { host, log } = recordingHost();
+  const { seam } = await mountAdapter(mock, host);
+
+  const stderr = new PassThrough();
+  // Pre-URL text split across two chunks, URL, then a same-chunk remainder.
+  stderr.write(Buffer.from('pre-one '));
+  stderr.write(Buffer.from('pre-two ws://127.0.0.1:9229/abc remainder'));
+  stderr.end();
+
+  const url = await seam.scrapeInspectorUrl(stderr);
+  expect(url).toBe('ws://127.0.0.1:9229/abc');
+  await delay(20);
+
+  const out = log.output.filter((o) => o.category === 'stderr').map((o) => o.text).join('');
+  // Pre-fix: the prefix re-emitted already-forwarded chunks ('pre-one ' and
+  // 'pre-two ' re-emitted), and the post-URL remainder was dropped. The fix
+  // forwards each byte once, preserving verbatim spacing.
+  expect(out, 'pre-URL + same-chunk remainder, each byte once').toBe('pre-one pre-two  remainder');
 }, 10_000);

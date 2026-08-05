@@ -257,52 +257,14 @@ export class BunDebugAdapter {
 
 
     try {
-      // Discover the inspector URL on stderr (first match wins; the banner
-      // bytes containing the URL are dropped, everything else is forwarded
-      // as output).
-      const stderrChunks: Buffer[] = [];
-      let foundUrl: string | null = null;
-      let urlResolve: ((url: string) => void) | null = null;
-      const urlPromise = new Promise<string>((resolveUrl, rejectUrl) => {
-        const deadline = setTimeout(() => {
-          rejectUrl(new Error(`could not find Bun inspector URL on stderr; got: ${Buffer.concat(stderrChunks).toString('utf8').slice(-2048)}`));
-        }, 10_000);
-        child.once('exit', () => {
-          if (!foundUrl) {
-            clearTimeout(deadline);
-            rejectUrl(new Error(`debuggee exited before inspector connected; stderr: ${Buffer.concat(stderrChunks).toString('utf8').slice(-2048)}`));
-          }
-        });
-        urlResolve = (u) => {
-          foundUrl = u;
-          clearTimeout(deadline);
-          resolveUrl(u);
-        };
-      });
+      // Discover the inspector URL on stderr: scrapeInspectorUrl forwards
+      // pre-URL bytes as output, drops the banner line carrying the URL,
+      // and resolves with the URL.
       const childStderr = child.stderr;
-      if (childStderr) {
-        childStderr.on('data', (chunk: Buffer) => {
-          stderrChunks.push(chunk);
-          const text = Buffer.concat(stderrChunks).toString('utf8');
-          const m = URL_RE.exec(text);
-          if (m) {
-            const prefix = text.slice(0, m.index);
-            stderrChunks.length = 0;
-            stderrChunks.push(Buffer.from(text.slice(m.index + m[0].length)));
-            if (prefix) this.emitOutput('stderr', prefix);
-            urlResolve?.(m[0]);
-            return;
-          }
-          if (Buffer.concat(stderrChunks).length > 4096) {
-            const tail = Buffer.concat(stderrChunks).subarray(-1024);
-            stderrChunks.length = 0;
-            stderrChunks.push(tail);
-          }
-          // Once the URL is found, forwardOutput() takes over; don't double-emit.
-          if (!foundUrl) this.emitOutput('stderr', chunk.toString('utf8'));
-        });
-      }
-      const inspectorUrl = await urlPromise;
+      if (!childStderr) throw new Error('launch: child has no stderr stream');
+      const inspectorUrl = await this.scrapeInspectorUrl(childStderr);
+      // forwardOutput re-attaches stderr so post-URL bytes (and any
+      // remainder buffered during the scrape) are forwarded from here on.
       this.forwardOutput(child);
       this.inspector = new WebSocketInspector(inspectorUrl);
       this.inspector.on('error', (err) => this.diagnostic(`inspector: ${err.message}`));
@@ -422,6 +384,64 @@ export class BunDebugAdapter {
   private forwardOutput(child: ChildProcess): void {
     child.stdout?.on('data', (chunk: Buffer) => this.emitOutput('stdout', chunk.toString('utf8')));
     child.stderr?.on('data', (chunk: Buffer) => this.emitOutput('stderr', chunk.toString('utf8')));
+  }
+
+  /**
+   * Scrape the Bun inspector URL off a child's stderr stream. Pre-URL bytes
+   * are forwarded as `stderr` output; the banner line carrying the URL is
+   * dropped; the URL is resolved. Post-URL bytes buffered during the scrape
+   * (the remainder after the URL on the same chunk) are forwarded too, so
+   * nothing is lost — `forwardOutput` re-attaches to carry subsequent chunks.
+   * Tracks emitted length so pre-URL text split across chunks is forwarded
+   * exactly once (not re-emitted from the accumulated buffer when the URL
+   * arrives).
+   */
+  private scrapeInspectorUrl(stderr: NodeJS.ReadableStream): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      let emitted = 0; // bytes already forwarded as output
+      const deadline = setTimeout(() => {
+        reject(new Error(`could not find Bun inspector URL on stderr; got: ${Buffer.concat(chunks).toString('utf8').slice(-2048)}`));
+      }, 10_000);
+      const onExit = () => {
+        clearTimeout(deadline);
+        reject(new Error(`debuggee exited before inspector connected; stderr: ${Buffer.concat(chunks).toString('utf8').slice(-2048)}`));
+      };
+      stderr.once('close', onExit);
+      const onData = (chunk: Buffer): void => {
+        chunks.push(chunk);
+        const text = Buffer.concat(chunks).toString('utf8');
+        const m = URL_RE.exec(text);
+        if (m) {
+          // Forward only the NOT-yet-emitted prefix (before the URL).
+          const prefix = text.slice(emitted, m.index);
+          if (prefix) this.emitOutput('stderr', prefix);
+          emitted = m.index + m[0].length;
+          // Forward the post-URL remainder on this chunk; forwardOutput
+          // takes over for later chunks.
+          const remainder = text.slice(emitted);
+          if (remainder) this.emitOutput('stderr', remainder);
+          clearTimeout(deadline);
+          stderr.removeListener('close', onExit);
+          stderr.removeListener('data', onData);
+          resolve(m[0]);
+          return;
+        }
+        // URL not found yet: forward only the newly-arrived bytes so the
+        // prefix isn't re-emitted when the URL-bearing chunk lands.
+        if (chunk.length > 0) {
+          this.emitOutput('stderr', chunk.toString('utf8'));
+          emitted += chunk.length;
+        }
+        // Bounded buffer: keep the last 1024 bytes for the error message.
+        if (Buffer.concat(chunks).length > 4096) {
+          const tail = Buffer.concat(chunks).subarray(-1024);
+          chunks.length = 0;
+          chunks.push(tail);
+        }
+      };
+      stderr.on('data', onData);
+    });
   }
   /** Debugger control — valid while paused (resume/step) or running (pause). */
   async resume(): Promise<void> {

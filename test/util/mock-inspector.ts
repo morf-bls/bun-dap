@@ -107,6 +107,7 @@ interface AdapterTestSeam {
   mode: 'launch' | 'attach' | null;
   attachHost: string | null;
   paused: boolean;
+  scrapeInspectorUrl(stderr: NodeJS.ReadableStream): Promise<string>;
 }
 
 /**
