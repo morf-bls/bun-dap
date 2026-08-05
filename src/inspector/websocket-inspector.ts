@@ -31,9 +31,11 @@ export class WebSocketInspector extends EventEmitter {
   private buffered: string[] = [];
   /** Set once the socket has opened (marker for queuing). */
   private opened = false;
+  private readonly requestTimeoutMs: number;
 
-  constructor(url: string) {
+  constructor(url: string, requestTimeoutMs: number = REQUEST_TIMEOUT_MS) {
     super();
+    this.requestTimeoutMs = requestTimeoutMs;
     this.ws = new WebSocket(url, {
       headers: {
         'Ref-Event-Loop': '0',
@@ -54,6 +56,11 @@ export class WebSocketInspector extends EventEmitter {
       }
     });
     this.ws.on('close', () => {
+      // Reset the connected marker first: a closed socket will never open
+      // again, so isConnected must go false and later sends must fail fast.
+      this.opened = false;
+      // Queued frames can never flush now; drop them so they don't linger.
+      this.buffered = [];
       const err = new Error('closed');
       for (const [, pending] of this.pending) {
         clearTimeout(pending.timer);
@@ -72,23 +79,31 @@ export class WebSocketInspector extends EventEmitter {
     return this.opened;
   }
 
-  /** Send one inspector request; resolves with the typed result. Rejects on JSC error or 10 s timeout. */
+  /** Send one inspector request; resolves with the typed result. Rejects on JSC error or request timeout. */
   send<M extends DevRequest>(method: M, params?: DevRequestMap[M]['params']): Promise<ResultOf<M>> {
     const msgId = ++this.id;
     const payload = JSON.stringify({ id: msgId, method, params });
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(msgId);
-        reject(new Error(`Inspector request timed out: ${method}`));
-      }, REQUEST_TIMEOUT_MS);
-      this.pending.set(msgId, { resolve: resolve as (v: unknown) => void, reject, timer });
-      if (this.ws.readyState === WebSocket.OPEN) {
-        this.ws.send(payload);
-      } else {
-        this.buffered.push(payload);
-        // If the socket never opens, nothing will flush; close() rejects pending.
-      }
-    });
+    const { promise, resolve, reject } = Promise.withResolvers<ResultOf<M>>();
+    const timer = setTimeout(() => {
+      this.pending.delete(msgId);
+      // A timed-out request must not flush later if the socket opens late.
+      this.buffered = this.buffered.filter((f) => f !== payload);
+      reject(new Error(`Inspector request timed out: ${method}`));
+    }, this.requestTimeoutMs);
+    this.pending.set(msgId, { resolve: resolve as (v: unknown) => void, reject, timer });
+    if (this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(payload);
+    } else if (this.ws.readyState === WebSocket.CONNECTING) {
+      // Socket still opening (e.g. --inspect-wait): queue the frame.
+      this.buffered.push(payload);
+    } else {
+      // CLOSING/CLOSED: the socket will never open again, so fail fast
+      // instead of buffering into a timeout that can never flush.
+      clearTimeout(timer);
+      this.pending.delete(msgId);
+      reject(new Error('closed'));
+    }
+    return promise;
   }
 
   /** Close the socket, rejecting every outstanding request with Error('closed'). */
