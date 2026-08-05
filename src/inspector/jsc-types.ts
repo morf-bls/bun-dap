@@ -133,10 +133,6 @@ export interface EvaluateOnCallFrameResult {
   wasThrown?: boolean;
 }
 
-export interface GetScriptSourceResult {
-  scriptSource: string;
-}
-
 export interface RuntimeEvaluateResult {
   result: RemoteObject;
   wasThrown?: boolean;
@@ -170,7 +166,6 @@ export interface BreakpointResolvedEvent {
 // ---- Request/result map (drives send() typing) ----
 
 export interface DevRequestMap {
-  'Inspector.enable': { params?: undefined; result: undefined };
   'Inspector.initialized': { params?: undefined; result: undefined };
   'Runtime.enable': { params?: undefined; result: undefined };
   'Runtime.evaluate': { params: RuntimeEvaluateParams; result: RuntimeEvaluateResult };
@@ -199,7 +194,6 @@ export interface DevRequestMap {
     params: EvaluateOnCallFrameParams;
     result: EvaluateOnCallFrameResult;
   };
-  'Debugger.getScriptSource': { params: { scriptId: string }; result: GetScriptSourceResult };
 }
 
 export type DevRequest = keyof DevRequestMap;
