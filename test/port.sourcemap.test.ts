@@ -54,11 +54,6 @@ describe('SourceMap (real bun build, inline map)', () => {
     const map = SourceMap.fromSourceMapURL(mapUrl, fixture);
     expect(map.generatedLocation(9999, 0)).toBeNull();
   });
-
-  test('fromSourceText accepts data: URIs and rejects plain text', () => {
-    expect(SourceMap.fromSourceText('console.log(1);', fixture)).toBeNull();
-    expect(SourceMap.fromSourceText(`x;\n//# sourceMappingURL=${mapUrl}`, fixture)).toBeInstanceOf(SourceMap);
-  });
 });
 
 describe('NoopSourceMap', () => {

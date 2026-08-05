@@ -52,18 +52,6 @@ export class SourceMap {
     return new SourceMap(decodeDataUri(dataURI), src);
   }
 
-  /**
-   * Parse the `//# sourceMappingURL=...` trailer from a script's source.
-   * Only `data:` URIs link to a usable map in v1; relative/http URLs return null.
-   */
-  static fromSourceText(scriptSource: string, src?: string): SourceMap | null {
-    const m = /\/\/[#@]\s*sourceMappingURL=(\S+)/.exec(scriptSource);
-    if (!m) return null;
-    const url = m[1]!;
-    if (url.startsWith('data:')) return SourceMap.fromSourceMapURL(url, src);
-    return null;
-  }
-
   private get selectedSource(): string {
     const sources = this.consumer.sources;
     if (sources.length <= 1) return sources[0] ?? '';
@@ -96,10 +84,6 @@ export class SourceMap {
     if (result.line === null) return { source: this.selectedSource, line: jsLine0 + 1, column: 1 };
     return { source: result.source, line: result.line, column: 1 };
   }
-
-  originalSources(): string[] {
-    return [...this.consumer.sources];
-  }
 }
 
 /** Identity fallback for scripts without a source map. */
@@ -110,10 +94,6 @@ export class NoopSourceMap {
 
   originalLocation(jsLine0: number, _jsCol0 = 0): OriginalPosition {
     return { source: '<unmapped>', line: jsLine0 + 1, column: 1 };
-  }
-
-  originalSources(): string[] {
-    return [];
   }
 }
 

@@ -19,7 +19,6 @@ import { BunDebugAdapter, type AdapterHost, type LaunchArgs } from './adapter/ad
  */
 export class BunDapSession extends LoggingDebugSession {
   private adapter: BunDebugAdapter | null = null;
-  private clientSupportsConfigurationDone = true;
   private mode: 'launch' | 'attach' | null = null;
   private gracefulDisconnect = false;
 
@@ -43,16 +42,6 @@ export class BunDapSession extends LoggingDebugSession {
     return {
       sendInitialized: () => {
         this.sendEvent(new InitializedEvent());
-        // Ancient clients that lack `supportsConfigurationDoneRequest` never
-        // send `configurationDone`; release the --inspect-wait gate for them
-        // after their configuration requests have had time to arrive.
-        if (!this.clientSupportsConfigurationDone) {
-          setTimeout(() => {
-            void this.getAdapter().configurationDone().catch(() => {
-              /* gate already released or inspector gone */
-            });
-          }, 200);
-        }
       },
       sendOutput: (category, text) => this.sendEvent(new OutputEvent(text, category)),
       sendStopped: (reason, threadId, exceptionText, hitBreakpointIds) => {
@@ -76,9 +65,6 @@ export class BunDapSession extends LoggingDebugSession {
   // -------------------------------------------------------------------------
 
   protected initializeRequest(response: DebugProtocol.InitializeResponse, args: DebugProtocol.InitializeRequestArguments): void {
-    // v1.68's InitializeRequestArguments doesn't carry the client's
-    // `supportsConfigurationDoneRequest`; nvim-dap and the omp harness both
-    // send `configurationDone`, so keep the default of true.
     void args;
     response.body = {
       supportsConfigurationDoneRequest: true,
