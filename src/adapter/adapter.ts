@@ -957,6 +957,17 @@ export class BunDebugAdapter {
         // passes of this statement must hit only the real bp. Racy by design;
         // the id stays in placeholderJscIds so a queued late pause swallows.
         this.requireInspector().send('Debugger.removeBreakpoint', { breakpointId: pauseId }).catch(() => {});
+        // Re-arm the real bp: JSC dedupes same-location breakpoints, so the
+        // placeholder removal above disarmed both the placeholder AND the
+        // real bp (one location, two ids). Without re-arming, later passes of
+        // this statement would not hit — the alias-consume path left nothing
+        // armed. Drop the stale id and arm fresh at the mapped coordinates.
+        const bp = this.lineBreakpoints.get(aliasKey);
+        if (bp) {
+          bp.jscBreakpointId = undefined;
+          const map = this.sources.get(bp.path)?.sourceMap ?? new NoopSourceMap();
+          void this.armLineBreakpoint(bp.path, aliasKey, bp, map);
+        }
         hitKeysAlias = [aliasKey];
       } else {
         const top = this.currentCallFrames[0];
