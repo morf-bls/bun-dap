@@ -208,3 +208,110 @@ test('M1: brake does not swallow an exception pause while brakePending', async (
   expect(log.stopped[0]!.reason, 'exception surfaced as exception').toBe('exception');
   expect(seam.brakePending, 'brakePending preserved across non-brake pause').toBe(true);
 }, 10_000);
+
+test('M3: bp hit with firstPausePending set reports breakpoint, not entry', async () => {
+  const mock = new MockInspector();
+  const { host, log } = recordingHost();
+  // Arm a real bp at BP_LINE: setBreakpointByUrl returns a jsc id we map to
+  // a DAP bp via jscToDapKey. A pause carrying that id is a real bp hit.
+  mock.reply('Debugger.setBreakpointByUrl', { breakpointId: 'real1', locations: [{ scriptId: 's1', lineNumber: BP_LINE - 1, columnNumber: 0 }] });
+  mock.reply('Debugger.resume', undefined);
+  mock.reply('Debugger.removeBreakpoint', undefined);
+  const { adapter, seam } = await mountAdapter(mock, host);
+
+  // Real bp armed (script already parsed via mountAdapter? No — arm needs a
+  // source entry. Emit scriptParsed so setBreakpoints arms immediately.)
+  mock.emit('Debugger.scriptParsed', { scriptId: 's1', url: ABS_PATH, startLine: 0, startColumn: 0 });
+  const set = await adapter.setBreakpoints({ source: { path: ABS_PATH }, breakpoints: [{ line: BP_LINE }] });
+  expect(set[0]!.verified).toBe(true);
+
+  // Simulate stopOnEntry: firstPausePending true and an entry bp armed.
+  seam.firstPausePending = true;
+  seam.entryBreakpointId = 'entry1';
+
+  // Pause carries the REAL bp's jsc id (real1), NOT the entry bp id. This is
+  // a genuine bp hit racing the entry stop — it must report 'breakpoint'.
+  mock.emit('Debugger.paused', makePause(BP_LINE - 1, 'Breakpoint', { breakpointId: 'real1' }));
+  await delay(50);
+
+  expect(log.stopped.length, 'bp hit surfaces a stop').toBe(1);
+  expect(log.stopped[0]!.reason, 'bp hit reports breakpoint not entry').toBe('breakpoint');
+  // Entry bp NOT disarmed: the stop was the bp's, the entry stop is still owed.
+  expect(seam.entryBreakpointId, 'entry bp kept for owed entry stop').toBe('entry1');
+  expect(seam.firstPausePending, 'firstPausePending still owed').toBe(true);
+}, 10_000);
+
+test('M3: pure entry stop (no bp hit) reports entry and disarms entry bp', async () => {
+  const mock = new MockInspector();
+  const { host, log } = recordingHost();
+  mock.reply('Debugger.removeBreakpoint', undefined);
+  mock.reply('Debugger.resume', undefined);
+  const { adapter, seam } = await mountAdapter(mock, host);
+
+  seam.firstPausePending = true;
+  seam.entryBreakpointId = 'entry1';
+
+  // Brake pause (Debugger.pause) at the entry statement with NO bp hit — the
+  // genuine entry stop. Must report 'entry' and disarm the entry bp.
+  mock.emit('Debugger.paused', makePause(BP_LINE - 1, 'PauseOnNextStatement'));
+  await delay(50);
+
+  expect(log.stopped.length, 'entry stop surfaces').toBe(1);
+  expect(log.stopped[0]!.reason, 'pure entry stop reports entry').toBe('entry');
+  expect(seam.entryBreakpointId, 'entry bp disarmed after entry stop').toBeUndefined();
+  expect(seam.firstPausePending, 'firstPausePending cleared').toBe(false);
+}, 10_000);
+
+test('M3: aliased entry-bp placeholder reports bp stop, keeps entry bp for entry stop', async () => {
+  const mock = new MockInspector();
+  const { host, log } = recordingHost();
+  const removed: string[] = [];
+  // Placeholder arm (line 0) + real bp arm at LINE-1 (line 2).
+  mock.handle('Debugger.setBreakpointByUrl', (params) => {
+    if (params && typeof params === 'object' && 'lineNumber' in params) {
+      const ln = (params as { lineNumber: number }).lineNumber;
+      if (ln === 0) return { breakpointId: 'ph1', locations: [] };
+      return { breakpointId: 'real1', locations: [{ scriptId: 's1', lineNumber: ln, columnNumber: 0 }] };
+    }
+    return { breakpointId: 'real1', locations: [] };
+  });
+  mock.reply('Debugger.resume', undefined);
+  mock.handle('Debugger.removeBreakpoint', (params) => { if (params && typeof params === 'object' && 'breakpointId' in params) removed.push((params as { breakpointId: string }).breakpointId); return undefined; });
+  const { adapter, seam } = await mountAdapter(mock, host);
+
+  const LINE = 3;
+  // Deferred bp → placeholder "ph1" armed, pending registered.
+  await adapter.setBreakpoints({ source: { path: ABS_PATH }, breakpoints: [{ line: LINE }] });
+  // Script parses → real bp arms at LINE-1 (line 2).
+  mock.emit('Debugger.scriptParsed', { scriptId: 's1', url: ABS_PATH, startLine: 0, startColumn: 0 });
+  await delay(10);
+  // Placeholder resolves to the bp's line (line 2) → alias set (NoopSourceMap: line-only).
+  mock.emit('Debugger.breakpointResolved', { breakpointId: 'ph1', location: { scriptId: 's1', lineNumber: LINE - 1, columnNumber: 0 } });
+  // stopOnEntry: the placeholder doubles as the entry bp.
+  seam.entryBreakpointId = 'ph1';
+  seam.entryBreakpointUrl = ABS_PATH;
+  seam.firstPausePending = true;
+  mock.emit('Debugger.paused', makePause(LINE - 1, 'Breakpoint', { breakpointId: 'ph1' }));
+  await delay(50);
+
+  // Stop #1: bp hit — reports 'breakpoint', NOT 'entry'.
+  expect(log.stopped.length, 'first stop surfaces').toBe(1);
+  expect(log.stopped[0]!.reason, 'aliased entry-bp placeholder reports breakpoint').toBe('breakpoint');
+  // The placeholder/entry bp is NOT removed (kept for the owed entry stop).
+  expect(removed, 'entry-bp placeholder not removed on bp stop').not.toContain('ph1');
+  expect(seam.entryBreakpointId, 'entry bp still armed for entry stop').toBe('ph1');
+  expect(seam.firstPausePending, 'firstPausePending still owed').toBe(true);
+  // The alias is consumed (one-shot).
+  expect(seam.placeholderAlias.has('ph1'), 'alias consumed').toBe(false);
+  // Resume (client continue) so the entry bp can re-fire.
+  await adapter.resume();
+  // Second pause: the entry bp re-fires (statement revisited). Now non-aliased
+  // placeholder with entry owed → falls through → reports 'entry' → disarms.
+  mock.emit('Debugger.paused', makePause(LINE - 1, 'Breakpoint', { breakpointId: 'ph1' }));
+  await delay(50);
+  expect(log.stopped.length, 'second stop surfaces').toBe(2);
+  expect(log.stopped[1]!.reason, 'genuine entry stop reports entry').toBe('entry');
+  expect(removed, 'entry bp disarmed after entry stop').toContain('ph1');
+  expect(seam.entryBreakpointId, 'entry bp cleared after entry stop').toBeUndefined();
+  expect(seam.firstPausePending, 'firstPausePending cleared after entry stop').toBe(false);
+}, 10_000);

@@ -98,6 +98,11 @@ interface AdapterTestSeam {
   inspector: unknown;
   attachInspector(): Promise<void>;
   brakePending: boolean;
+  firstPausePending: boolean;
+  entryBreakpointId: string | undefined;
+  entryBreakpointUrl: string | null;
+  placeholderJscIds: Set<string>;
+  placeholderAlias: Map<string, string>;
 }
 
 /**

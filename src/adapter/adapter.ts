@@ -979,20 +979,22 @@ export class BunDebugAdapter {
       }
       if (aliasKey !== undefined && aliasedId !== undefined) {
         this.placeholderAlias.delete(aliasedId);
-        // Disarm the placeholder now that its hit has been consumed — later
-        // passes of this statement must hit only the real bp. Racy by design;
-        // the id stays in placeholderJscIds so a queued late pause swallows.
-        this.requireInspector().send('Debugger.removeBreakpoint', { breakpointId: aliasedId }).catch(() => {});
-        // Re-arm the real bp: JSC dedupes same-location breakpoints, so the
-        // placeholder removal above disarmed both the placeholder AND the
-        // real bp (one location, two ids). Without re-arming, later passes of
-        // this statement would not hit — the alias-consume path left nothing
-        // armed. Drop the stale id and arm fresh at the mapped coordinates.
-        const bp = this.lineBreakpoints.get(aliasKey);
-        if (bp) {
-          bp.jscBreakpointId = undefined;
-          const map = this.sources.get(bp.path)?.sourceMap ?? new NoopSourceMap();
-          void this.armLineBreakpoint(bp.path, aliasKey, bp, map);
+        // When the placeholder doubles as the entry bp (stopOnEntry + Path B),
+        // do NOT remove it here: the first pause reports the bp hit, but the
+        // entry stop is still owed and fires on continue when the entry
+        // statement re-executes. Removing would disarm the entry bp (JSC
+        // dedupes same-location breakpoints), leaving no way to surface the
+        // entry stop. The real bp also cannot re-arm yet (JSC rejects a
+        // duplicate at the same location); it re-arms after the entry stop
+        // disarms the placeholder below. Keep firstPausePending true.
+        if (aliasedId !== this.entryBreakpointId) {
+          this.requireInspector().send('Debugger.removeBreakpoint', { breakpointId: aliasedId }).catch(() => {});
+          const bp = this.lineBreakpoints.get(aliasKey);
+          if (bp) {
+            bp.jscBreakpointId = undefined;
+            const map = this.sources.get(bp.path)?.sourceMap ?? new NoopSourceMap();
+            void this.armLineBreakpoint(bp.path, aliasKey, bp, map);
+          }
         }
         hitKeysAlias = [aliasKey];
       } else {
@@ -1050,18 +1052,23 @@ export class BunDebugAdapter {
       return;
     }
 
-    // A bp hit (via the brake overlap or a placeholder alias) always reports
-    // 'breakpoint', even when it coincides with the first pause — otherwise
-    // stopOnEntry + a bp at the entry statement surfaces as a spurious
-    // 'entry' stop at the bp's line.
-    const stop = brakeKeys.length > 0 || hitKeysAlias.length > 0 ? { reason: 'breakpoint' } : this.mapStopReason(params.reason, params);
+    // M3: a bp hit — from the brake overlap, a placeholder alias, OR a real
+    // armed bp matched via jscToDapKey — always reports 'breakpoint', even
+    // when it coincides with the first pause. Otherwise stopOnEntry + a bp at
+    // the entry statement surfaces as a spurious 'entry' stop at the bp's line
+    // (the old mapStopReason firstPausePending mapping). A pure entry stop
+    // (the entry bp/placeholder firing with NO aliased real bp) has no entry
+    // in hitKeys, so hasBpHit is false and mapStopReason reports 'entry'.
+    const hasBpHit = brakeKeys.length > 0 || hitKeysAlias.length > 0 || hitLineEntries.length > 0 || hitFnEntries.length > 0;
+    const stop = hasBpHit ? { reason: 'breakpoint' } : this.mapStopReason(params.reason, params);
     const hitDapIds = hitKeys
       .map((k) => (this.lineBreakpoints.get(k) ?? this.functionBreakpoints.get(k))?.id)
       .filter((id): id is number => id !== undefined);
     this.emitStopped(stop, hitDapIds);
-    // The entry breakpoint is one-shot: disarm it after the first stop so
-    // `continue` cannot re-hit line 0.
-    if (this.entryBreakpointId !== undefined) {
+    // The entry breakpoint is one-shot: disarm it only after a stop that was
+    // genuinely the entry stop (reason 'entry'), so a coinciding bp stop
+    // does not eat the entry stop the client is still owed on continue.
+    if (this.entryBreakpointId !== undefined && stop.reason === 'entry') {
       const id = this.entryBreakpointId;
       this.entryBreakpointId = undefined;
       this.firstPausePending = false;
