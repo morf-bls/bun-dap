@@ -768,12 +768,15 @@ export class BunDebugAdapter {
       } else {
         // The script is not parsed yet (the normal launch flow — setBreakpoints
         // arrives while the --inspect-wait gate holds parsing). Defer: the bp
-        // arms at mapped coordinates from onScriptParsed. Register the pending
-        // key SYNCHRONOUSLY, before the placeholder RPC below awaits — the
-        // gate may already be open, in which case the scriptParsed event can
-        // be processed while this call is in flight; if pending were set only
-        // after the await, onScriptParsed would see an empty registry and the
-        // bp would never arm.
+        // arms at mapped coordinates from onScriptParsed. Surface a
+        // `pending script load` message so clients (and the agent-usage doc)
+        // can show why verified is still false. Register the pending key
+        // SYNCHRONOUSLY, before the placeholder RPC below awaits — the gate
+        // may already be open, in which case the scriptParsed event can be
+        // processed while this call is in flight; if pending were set only
+        // after the await, onScriptParsed would see an empty registry and
+        // the bp would never arm.
+        bp.message = 'pending script load';
         let keys = this.pendingByPath.get(absPath);
         if (!keys) this.pendingByPath.set(absPath, (keys = []));
         keys.push(key);
