@@ -1001,10 +1001,14 @@ export class BunDebugAdapter {
       }
     }
 
-    // Logpoints: emit the interpolated message, then resume — never stop.
-    const logBp = hitLineEntries.find((b) => b.logMessage !== undefined);
-    if (logBp) {
-      await this.evalLogpoint(logBp);
+    // Logpoints: emit EVERY hit logpoint's interpolated message, then resume
+    // — never stop. A single pause can carry several logpoints (e.g. two
+    // deferred logpoints on the same statement, surfaced together via the
+    // brake overlap); logging only the first (the old `find`) dropped the
+    // rest. Logpoints never stop regardless of sibling non-logpoint bps.
+    const logBps = hitLineEntries.filter((b) => b.logMessage !== undefined);
+    if (logBps.length > 0) {
+      for (const lp of logBps) await this.evalLogpoint(lp);
       await this.resumeInternal();
       return;
     }
@@ -1355,16 +1359,51 @@ function scopeName(type: string): string {
   }
 }
 
-/** Compile a DAP logMessage template (`${expr}` interpolation) into an expression. */
-function compileLogMessage(template: string): string {
-  const parts = template.split(/\$\{([^}]+)\}/);
+/** Compile a DAP logMessage template (`${expr}` interpolation) into an
+ * expression. Walks the template tracking brace depth so `${...}` captures
+ * balanced braces — a naive `[^}]+` split truncated interpolations at the
+ * first inner `}` (object literals `${ {a:1} }`, nested template literals
+ * `${ `x ${y}` }`), producing invalid or wrong expressions. Exported for
+ * unit testing. */
+export function compileLogMessage(template: string): string {
+  const segments: string[] = [];
+  let i = 0;
+  for (;;) {
+    const start = template.indexOf('${', i);
+    if (start < 0) {
+      segments.push(template.slice(i));
+      break;
+    }
+    segments.push(template.slice(i, start));
+    // Walk past `${` tracking brace depth so a `}` inside the expression
+    // (object literals, nested templates) does not end the interpolation
+    // early. depth returns to 0 at the matching closing brace.
+    let depth = 1;
+    let j = start + 2;
+    while (j < template.length && depth > 0) {
+      const c = template[j]!;
+      if (c === '{') depth++;
+      else if (c === '}') depth--;
+      j++;
+    }
+    if (depth !== 0) {
+      // Unbalanced — best effort: take the rest as the expression.
+      segments.push(template.slice(start + 2));
+      segments.push('');
+      break;
+    }
+    segments.push(template.slice(start + 2, j - 1));
+    i = j;
+  }
+  // Even indices are literal text, odd indices are interpolated expressions
+  // — the same alternation the original split produced, but brace-safe.
   let out = '';
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i]!;
-    if (i % 2 === 0) {
-      out += JSON.stringify(part.replace(/\n/g, '\\n'));
+  for (let k = 0; k < segments.length; k++) {
+    const seg = segments[k]!;
+    if (k % 2 === 0) {
+      out += JSON.stringify(seg.replace(/\n/g, '\\n'));
     } else {
-      out += ` + (${part}) + `;
+      out += ` + (${seg}) + `;
     }
   }
   // Collapse the leading/trailing concatenation artifacts into one expression.
