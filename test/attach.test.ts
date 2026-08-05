@@ -1,7 +1,7 @@
 import { test, expect } from 'bun:test';
 import { connectStdio } from './util/framed-client';
 import { getAvailablePort } from '../src/util/port';
-import { castObject, serverFixture, armBreakpoint } from './util/dap-helpers';
+import { castObject, hello, serverFixture, armBreakpoint } from './util/dap-helpers';
 
 // Integration exception to the no-timers rule: the server is a real spawned
 // process whose bind/response timing is not under deterministic control, so
@@ -158,6 +158,41 @@ test('e2e: attach disconnect with terminateDebuggee kills the target', async () 
       }),
     ]);
     expect(await probeServer(`http://127.0.0.1:${httpPort}/dead`)).toBe('never');
+  } finally {
+    client.close();
+    child.kill();
+  }
+}, 30_000);
+
+test('e2e: attach mode emits exited+terminated when the debuggee exits', async () => {
+  // hello.ts runs to completion on its own. Attach mode has no child
+  // handle, so the inspector socket close is the only exit signal — a
+  // regression here leaves the client session open forever (nvim log:
+  // final continue, then nothing; session never closed).
+  const inspectPort = await getAvailablePort();
+  const child = Bun.spawn(['bun', `--inspect-wait=127.0.0.1:${inspectPort}`, hello], {
+    cwd: import.meta.dir,
+    stdout: 'pipe',
+    stderr: 'pipe',
+    stdin: 'ignore',
+  });
+  const url = await scrapeInspectorUrl(child);
+  const client = connectStdio();
+  try {
+    const init = await client.send('initialize', { adapterID: 'bun-dap-test', pathFormat: 'path' });
+    expect(init.success, init.message).toBe(true);
+    const attach = await client.send('attach', { url });
+    expect(attach.success, attach.message).toBe(true);
+    await client.waitForEvent('initialized');
+    await client.send('setExceptionBreakpoints', { filters: [] });
+    const done = await client.send('configurationDone', {});
+    expect(done.success).toBe(true);
+
+    // No breakpoints: the program runs to completion. The adapter must emit
+    // exited then terminated — nvim-dap closes the session on terminated.
+    const exited = await client.waitForEvent('exited', 10_000);
+    expect(castObject(exited.body).exitCode).toBe(0);
+    await client.waitForEvent('terminated', 5_000);
   } finally {
     client.close();
     child.kill();

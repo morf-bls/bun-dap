@@ -132,6 +132,10 @@ export class BunDebugAdapter {
    * for the subsequent continue, which clears it in resume().
    */
   private stepPending = false;
+  /** Dedupes exited/terminated emission across child-exit and inspector-disconnect. */
+  private debuggeeGoneSent = false;
+  /** Exit code from the child (launch); attach reports 0. */
+  private exitCode: number | null = null;
   private paused = false;
   private attachHost: string | null = null;
   private entryBreakpointUrl: string | null = null;
@@ -189,8 +193,19 @@ export class BunDebugAdapter {
   private currentFrameIds: number[] = [];
   private frameIdToCallFrame = new Map<number, CallFrame>();
   private nextFrameId = 1;
-  private scopeRefs = new Handles<{ objectId: string; callFrameId: CallFrameId }>();
-  private variableRefs = new Handles<string>();
+  /**
+   * Every variablesReference issued to the client, from ONE counter shared
+   * by scopes and nested objects (upstream uses a single counter too).
+   * Separate per-kind counters starting at the same base collide: a nested
+   * object's ref numerically equal to a scope ref resolves to the scope's
+   * objectId and the client sees the wrong variables (nvim log: expanding
+   * `tc` showed the local scope's vars). Reset at the START of each pause —
+   * NOT on Debugger.resumed: JSC does not reliably send resumed after
+   * stepNext (probe-verified), so objectIds from earlier pauses stayed
+   * reachable and later fetches errored (-32000 Internal error) or returned
+   * stale data.
+   */
+  private objectRefs = new Handles<{ objectId: string; callFrameId?: CallFrameId }>();
 
   // Buffered stopped emissions (waiting for `initialized` to be sent).
   private stoppedBuffer: Array<() => void> = [];
@@ -203,6 +218,8 @@ export class BunDebugAdapter {
     this.mode = 'launch';
     this.noDebug = !!args.noDebug;
     this.stopOnEntry = !!args.stopOnEntry;
+    this.debuggeeGoneSent = false;
+    this.exitCode = null;
     const cwd = args.cwd ?? process.cwd();
     const program = resolve(cwd, args.program);
     if (!existsSync(program)) {
@@ -297,6 +314,8 @@ export class BunDebugAdapter {
 
   async attach(args: AttachArgs): Promise<void> {
     this.mode = 'attach';
+    this.debuggeeGoneSent = false;
+    this.exitCode = null;
     let url = args.url.trim();
     if (!/^ws:\/\/.+/.test(url)) throw new Error(`attach: not a ws:// url: ${url}`);
     if (!/^ws:\/\/[^/]+\/.+/.test(url)) url += '/';
@@ -369,6 +388,12 @@ export class BunDebugAdapter {
     inspector.on('Debugger.paused', (params) => void this.onPaused(params as PausedEvent));
     inspector.on('Debugger.breakpointResolved', (params) => this.onBreakpointResolved(params as BreakpointResolvedEvent));
     inspector.on('Debugger.resumed', () => this.onResumed());
+    // The debuggee exiting closes the inspector socket. In attach mode that
+    // is the ONLY exit signal (no child handle) — without this the client
+    // never sees exited/terminated and the session stays open after the
+    // program ran to completion (nvim log: final continue, then nothing).
+    // In launch mode onChildExit usually fires first; the flag dedupes.
+    inspector.on('disconnected', () => this.onDebuggeeGone());
 
     if (this.mode === 'launch' && this.stopOnEntry) this.firstPausePending = true;
 
@@ -446,9 +471,18 @@ export class BunDebugAdapter {
   }
 
   private onChildExit(code: number | null): void {
+    this.exitCode = code ?? 0;
     this.inspector?.close();
     this.inspector = null;
-    this.host?.sendExited(code ?? 0);
+    this.onDebuggeeGone();
+  }
+
+  /** Emit exited+terminated exactly once, however the debuggee went away. */
+  private onDebuggeeGone(): void {
+    if (this.debuggeeGoneSent) return;
+    this.debuggeeGoneSent = true;
+    this.inspector = null;
+    this.host?.sendExited(this.exitCode ?? 0);
     this.host?.sendTerminated();
   }
 
@@ -851,6 +885,13 @@ export class BunDebugAdapter {
     this.currentCallFrames = params.callFrames ?? [];
     this.currentFrameIds = [];
     this.frameIdToCallFrame.clear();
+    // New pause = new object generation: JSC invalidates remote objects from
+    // earlier pauses on resume, but does NOT reliably send Debugger.resumed
+    // (never after stepNext), so stale refs must be dropped HERE. Without
+    // this, variables requests carrying old refs fetched old objectIds and
+    // JSC answered -32000 Internal error — nvim's variables disappearing
+    // after every step.
+    this.objectRefs.reset();
     for (const frame of this.currentCallFrames) {
       const id = this.nextFrameId++;
       this.currentFrameIds.push(id);
@@ -1094,8 +1135,9 @@ export class BunDebugAdapter {
     this.currentCallFrames = [];
     this.currentFrameIds = [];
     this.frameIdToCallFrame.clear();
-    this.scopeRefs.reset();
-    this.variableRefs.reset();
+    // objectRefs intentionally NOT reset here: JSC does not reliably emit
+    // resumed (never after stepNext — probe-verified), so the reset lives at
+    // the start of onPaused, the one transition every pause passes through.
   }
 
   private async resumeInternal(): Promise<void> {
@@ -1166,7 +1208,7 @@ export class BunDebugAdapter {
     if (!frame) return [];
     return frame.scopeChain.map((scope, i) => {
       const objectId = scope.object?.objectId;
-      const variablesReference = objectId ? this.scopeRefs.create({ objectId, callFrameId: frame.callFrameId }) : 0;
+      const variablesReference = objectId ? this.objectRefs.create({ objectId, callFrameId: frame.callFrameId }) : 0;
       // JSC/Bun emits the function-local scope as the first `closure`; DAP
       // clients look for a `Local` scope to show locals.
       const isLocal = i === 0 && (scope.type === 'local' || scope.type === 'closure');
@@ -1179,18 +1221,14 @@ export class BunDebugAdapter {
   }
 
   async variables(variablesReference: number): Promise<DebugProtocol.Variable[]> {
-    let objectId: string | undefined;
-    const scopeEntry = this.scopeRefs.get(variablesReference, undefined as { objectId: string; callFrameId: CallFrameId } | undefined);
-    if (scopeEntry) objectId = scopeEntry.objectId;
-    const varEntry = this.variableRefs.get(variablesReference, undefined as string | undefined);
-    if (varEntry) objectId = varEntry;
-    if (!objectId) return [];
-    const props = await this.requireInspector().send('Runtime.getDisplayableProperties', { objectId, ownProperties: true, generatePreview: true });
+    const entry = this.objectRefs.get(variablesReference, undefined as { objectId: string } | undefined);
+    if (!entry) return [];
+    const props = await this.requireInspector().send('Runtime.getDisplayableProperties', { objectId: entry.objectId, ownProperties: true, generatePreview: true });
     const all = [...(props.properties ?? props.result ?? []), ...(props.internalProperties ?? [])];
     return all.map((p) => ({
       name: p.name,
       value: formatRemoteObject(p.value),
-      variablesReference: p.value?.objectId ? this.variableRefs.create(p.value.objectId) : 0,
+      variablesReference: p.value?.objectId ? this.objectRefs.create({ objectId: p.value.objectId }) : 0,
       type: p.value?.type,
     }));
   }
@@ -1222,7 +1260,7 @@ export class BunDebugAdapter {
     }
     return {
       result: formatRemoteObject(res.result),
-      variablesReference: res.result?.objectId ? this.variableRefs.create(res.result.objectId) : 0,
+      variablesReference: res.result?.objectId ? this.objectRefs.create({ objectId: res.result.objectId }) : 0,
     };
   }
 

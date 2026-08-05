@@ -144,6 +144,16 @@ test('stepping: next and stepOut move through greet', async () => {
     const stopped = await client.waitForEvent('stopped');
     expect(castObject(stopped.body).reason).toBe('breakpoint');
 
+    // Fetch variables at the bp pause first — real clients (nvim-dap) fetch
+    // every scope at every stop, and the regression only bites when pause-1
+    // variables populated the ref stores before the step.
+    const atBp = await topOf(client);
+    const sc0 = await client.send('scopes', { frameId: atBp.id });
+    for (const scope of castObject(sc0.body).scopes as Array<Record<string, unknown>>) {
+      const ref = scope.variablesReference as number;
+      if (ref > 0) await client.send('variables', { variablesReference: ref });
+    }
+
     // next over `const greeting` onto `console.log(greeting)` (TS line 3).
     // Step-completion pauses report reason 'step' (nvim-dap only moves the
     // cursor for 'step'; 'pause' left the UI stranded at the bp line).
@@ -154,6 +164,17 @@ test('stepping: next and stepOut move through greet', async () => {
     const afterNext1 = await topOf(client);
     expect(afterNext1.name).toBe('greet');
     expect(afterNext1.line).toBe(3);
+
+    // Regression: variables must survive a step. JSC never sends
+    // Debugger.resumed after stepNext, so ref stores once stayed stale —
+    // every post-step variables fetch failed with -32000 Internal error and
+    // nvim showed no variables after stepping.
+    const sc1 = await client.send('scopes', { frameId: afterNext1.id });
+    const scopeArr1 = castObject(sc1.body).scopes as Array<Record<string, unknown>>;
+    expect(scopeArr1.length).toBeGreaterThan(0);
+    const vars1 = await client.send('variables', { variablesReference: scopeArr1[0]!.variablesReference });
+    expect(vars1.success, vars1.message).toBe(true);
+    expect((castObject(vars1.body).variables as unknown[]).length).toBeGreaterThan(0);
 
     // next onto `return greeting` (TS line 4).
     const nx2 = await client.send('next', { threadId: 1 });
