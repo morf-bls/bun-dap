@@ -24,6 +24,11 @@ function armCounter(mock: MockInspector, prefix: string): void {
   }));
 }
 
+/** Narrow a recorded mock send's unknown params to a plain object for reads. */
+function paramsOf(s: { method: string; params: unknown }): Record<string, unknown> {
+  return s.params !== null && typeof s.params === 'object' ? (s.params as Record<string, unknown>) : {};
+}
+
 function makePause(lineNumber: number, reason = 'PauseOnNextStatement', data?: Record<string, unknown>): PausedEvent {
   return {
     callFrames: [{
@@ -563,3 +568,119 @@ test('L2: stackTrace reports column >= 1 for source-mapped frames', async () => 
   // 0 means "unknown" to many clients, who then misplace the cursor).
   expect(stackFrames[0]!.column, 'source-mapped frame column >= 1').toBeGreaterThanOrEqual(1);
 }, 15_000);
+test('L25: failing condition on one bp does not suppress a sibling stop on the same pause', async () => {
+  const mock = new MockInspector();
+  const { host, log } = recordingHost();
+  armCounter(mock, 'bp');
+  mock.reply('Debugger.evaluateOnCallFrame', { result: { type: 'boolean', value: false }, wasThrown: false });
+  mock.reply('Debugger.resume', undefined);
+  const { adapter } = await mountAdapter(mock, host);
+
+  // Two bps on the SAME statement: the first has a failing condition, the
+  // second none. The brake pause carries both keys (brakeOverlapKeys), so one
+  // pause gates both. Pre-fix the loop resumed on the first failing bp and
+  // the unconditioned sibling never stopped.
+  await adapter.setBreakpoints({
+    source: { path: ABS_PATH },
+    breakpoints: [{ line: BP_LINE, condition: 'false' }, { line: BP_LINE }],
+  });
+  await adapter.configurationDone();
+  mock.emit('Debugger.scriptParsed', { scriptId: 's1', url: ABS_PATH, startLine: 0, startColumn: 0 });
+  mock.emit('Debugger.paused', makePause(BP_LINE - 1));
+  await delay(50);
+
+  expect(log.stopped.length, 'sibling bp must still stop').toBe(1);
+  expect(log.stopped[0]!.reason).toBe('breakpoint');
+  const resumes = mock.sent.filter((s) => s.method === 'Debugger.resume');
+  expect(resumes.length, 'no swallow resume').toBe(0);
+}, 10_000);
+
+test('L25: failing hitCondition on one bp does not suppress a sibling stop on the same pause', async () => {
+  const mock = new MockInspector();
+  const { host, log } = recordingHost();
+  armCounter(mock, 'bp');
+  mock.reply('Debugger.resume', undefined);
+  const { adapter } = await mountAdapter(mock, host);
+
+  // Same shape as above, but the failing gate is a hitCondition ('2' not yet
+  // reached on the first pause) instead of a condition.
+  await adapter.setBreakpoints({
+    source: { path: ABS_PATH },
+    breakpoints: [{ line: BP_LINE, hitCondition: '2' }, { line: BP_LINE }],
+  });
+  await adapter.configurationDone();
+  mock.emit('Debugger.scriptParsed', { scriptId: 's1', url: ABS_PATH, startLine: 0, startColumn: 0 });
+  mock.emit('Debugger.paused', makePause(BP_LINE - 1));
+  await delay(50);
+
+  expect(log.stopped.length, 'sibling bp must still stop').toBe(1);
+  expect(log.stopped[0]!.reason).toBe('breakpoint');
+  const resumes = mock.sent.filter((s) => s.method === 'Debugger.resume');
+  expect(resumes.length, 'no swallow resume').toBe(0);
+}, 10_000);
+
+test('L26: re-sent function bp with changed condition re-arms instead of being ignored', async () => {
+  const mock = new MockInspector();
+  const { host } = recordingHost();
+  let symN = 0;
+  mock.handle('Debugger.addSymbolicBreakpoint', () => ({ breakpointId: `sym${++symN}` }));
+  const { adapter } = await mountAdapter(mock, host);
+
+  const first = await adapter.setFunctionBreakpoints({ breakpoints: [{ name: 'foo' }] });
+  expect(first.length).toBe(1);
+  // Re-send the same symbol with a changed condition AND a hitCondition.
+  // Pre-fix this was silently kept with the OLD gating (and the response came
+  // back with zero breakpoints).
+  const second = await adapter.setFunctionBreakpoints({
+    breakpoints: [{ name: 'foo', condition: 'x > 1', hitCondition: '3' }],
+  });
+  expect(second.length, 'changed bp is re-armed, not silently kept').toBe(1);
+
+  const adds = mock.sent.filter((s) => s.method === 'Debugger.addSymbolicBreakpoint');
+  expect(adds.length, 'two arms: original + re-arm').toBe(2);
+  expect(paramsOf(adds[1]!).condition, 'new condition reaches JSC').toBe('x > 1');
+  const removes = mock.sent.filter((s) => s.method === 'Debugger.removeSymbolicBreakpoint');
+  expect(removes.length, 'old symbolic bp removed before re-arm').toBe(1);
+  expect(paramsOf(removes[0]!).symbol).toBe('foo');
+}, 10_000);
+
+test('L27: process event only in launch mode (attach would report pid 0)', async () => {
+  const mock = new MockInspector();
+  const { host, log } = recordingHost();
+  const { adapter, seam } = await mountAdapter(mock, host);
+  seam.mode = 'launch';
+  seam.launchedChild = { pid: 4242 } as unknown;
+  await adapter.configurationDone();
+  expect(log.processStarted, 'launch with a child reports the real pid').toBe(1);
+  expect(log.threads.length, 'thread started still reported').toBe(1);
+  // `process` event would carry a fabricated pid 0.
+  const mock2 = new MockInspector();
+  const { host: host2, log: log2 } = recordingHost();
+  const { adapter: adapter2, seam: seam2 } = await mountAdapter(mock2, host2);
+  seam2.mode = 'attach';
+  await adapter2.configurationDone();
+  expect(log2.processStarted, 'attach emits no process event').toBe(0);
+  expect(log2.threads.length, 'attach still reports the thread').toBe(1);
+}, 10_000);
+
+test('L28: resume releases evaluate object groups so the debuggee drops retained objects', async () => {
+  const mock = new MockInspector();
+  const { host } = recordingHost();
+  mock.reply('Debugger.resume', undefined);
+  mock.reply('Debugger.stepNext', undefined);
+  const { adapter } = await mountAdapter(mock, host);
+
+  await adapter.resume();
+  const releases = mock.sent.filter((s) => s.method === 'Runtime.releaseObjectGroup');
+  expect(releases.length, 'resume releases all evaluate groups').toBe(3);
+  const resumeIdx = mock.sent.findIndex((s) => s.method === 'Debugger.resume');
+  expect(
+    releases.map((r) => String(paramsOf(r).objectGroupName)).sort(),
+  ).toEqual(['console', 'debugger', 'repl']);
+  const lastReleaseIdx = Math.max(...releases.map((r) => mock.sent.indexOf(r)));
+  expect(resumeIdx, 'Debugger.resume sent').toBeGreaterThanOrEqual(0);
+  expect(lastReleaseIdx, 'groups released BEFORE the resume RPC').toBeLessThan(resumeIdx);
+  await adapter.stepIn();
+  const total = mock.sent.filter((s) => s.method === 'Runtime.releaseObjectGroup');
+  expect(total.length, 'step paths release the groups too').toBe(6);
+}, 10_000);

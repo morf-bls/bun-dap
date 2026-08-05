@@ -1054,26 +1054,41 @@ export class BunDebugAdapter {
     const hitLineEntries = hitKeys.map((k) => this.lineBreakpoints.get(k)).filter((b): b is LineBreakpoint => !!b);
     const hitFnEntries = hitKeys.map((k) => this.functionBreakpoints.get(k)).filter((b): b is FunctionBreakpoint => !!b);
 
-    // Hit-count gating (line + function).
-    for (const bp of hitLineEntries) bp.hitCount++;
-    for (const bp of hitFnEntries) bp.hitCount++;
-    for (const bp of [...hitLineEntries, ...hitFnEntries]) {
-      if (bp.hitCondition !== undefined && bp.hitCount < Number(bp.hitCondition)) {
+    // Hit-count gating (line + function). Several bps can share one pause
+    // (two bps on one statement via the brake overlap, or an alias), so stop
+    // when ANY hit bp has reached its count. The old loop resumed on the
+    // FIRST failing bp, silently suppressing the siblings' stop (L25). With
+    // no hit bp at all (pure exception/entry stop) there is nothing to gate.
+    const gated = [...hitLineEntries, ...hitFnEntries];
+    if (gated.length > 0) {
+      const anyCountPass = gated.some(
+        (bp) => bp.hitCondition === undefined || bp.hitCount >= Number(bp.hitCondition),
+      );
+      if (!anyCountPass) {
         await this.resumeInternal();
         return;
       }
-    }
 
-    // Condition gating: a falsy condition resumes without stopping. Line
-    // breakpoints carry an optional `condition`; function breakpoints too.
-    const topFrame = this.currentCallFrames[0];
-    for (const bp of [...hitLineEntries, ...hitFnEntries]) {
-      if (bp.condition !== undefined) {
-        const ok = await this.evalCondition(bp.condition, topFrame);
-        if (!ok) {
-          await this.resumeInternal();
-          return;
+      // Condition gating: a falsy condition resumes without stopping — but
+      // only when EVERY hit bp fails; an unconditioned sibling passes
+      // trivially and its stop must not be eaten by a failing conditioned one
+      // (L25). Evaluate conditioned bps until one passes; short-circuit on
+      // the first unconditioned bp (it always passes).
+      const topFrame = this.currentCallFrames[0];
+      let anyConditionPass = false;
+      for (const bp of gated) {
+        if (bp.condition === undefined) {
+          anyConditionPass = true;
+          break;
         }
+        if (await this.evalCondition(bp.condition, topFrame)) {
+          anyConditionPass = true;
+          break;
+        }
+      }
+      if (!anyConditionPass) {
+        await this.resumeInternal();
+        return;
       }
     }
 
