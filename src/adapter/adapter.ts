@@ -1093,17 +1093,27 @@ export class BunDebugAdapter {
   private async evalCondition(expression: string, frame: CallFrame | undefined): Promise<boolean> {
     const inspector = this.requireInspector();
     try {
-      if (frame !== undefined) {
-        const res = await inspector.send('Debugger.evaluateOnCallFrame', { callFrameId: frame.callFrameId, expression, returnByValue: true, silent: true });
-        if (res.wasThrown) {
-          this.emitOutput('console', `condition threw: ${describeException(res.result)}\n`);
-          return false;
-        }
-        return !!res.result.value;
+      const res = frame !== undefined
+        ? await inspector.send('Debugger.evaluateOnCallFrame', { callFrameId: frame.callFrameId, expression, returnByValue: true, silent: true })
+        : await inspector.send('Runtime.evaluate', { expression, returnByValue: true, silent: true });
+      if (res.wasThrown) {
+        this.emitOutput('console', `condition threw: ${describeException(res.result)}\n`);
+        return false;
       }
-      const res = await inspector.send('Runtime.evaluate', { expression, returnByValue: true, silent: true });
-      if (res.wasThrown) return false;
-      return !!res.result.value;
+      const result = res.result;
+      // JSC does not serialize bigint/symbol `value` (it is undefined), so the
+      // `!!result.value` truthiness check treated every nonzero bigint and
+      // every symbol as falsy — a condition like `n` on `0n`/`42n`/`Symbol()`
+      // never stopped. Recover truthiness from the type/description: bigint
+      // from its description (`0n` is falsy, any other is truthy), symbol as
+      // always-truthy. Other types fall back to the serialized value.
+      if (result.type === 'bigint') {
+        const desc = result.description ?? '';
+        try { return BigInt(desc.replace(/n$/, '')) !== 0n; }
+        catch { return true; }
+      }
+      if (result.type === 'symbol') return true;
+      return !!result.value;
     } catch (err) {
       this.emitOutput('console', `condition eval error: ${(err as Error).message}\n`);
       return false;

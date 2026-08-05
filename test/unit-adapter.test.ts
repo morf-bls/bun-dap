@@ -369,3 +369,55 @@ test('L5: onPaused throw is swallowed to diagnostic, not unhandled', async () =>
   // The rejection must surface as a diagnostic, not an unhandled rejection.
   expect(captured.some((s) => s.includes('onPaused: boom'))).toBe(true);
 }, 10_000);
+
+test('L9: condition truthiness: nonzero bigint stops, 0n does not', async () => {
+  const mock = new MockInspector();
+  const { host, log } = recordingHost();
+  armCounter(mock, 'bp');
+  mock.reply('Debugger.resume', undefined);
+  const { adapter } = await mountAdapter(mock, host);
+
+  // Parse the script FIRST so setBreakpoints arms directly (bp1) instead of
+  // deferring through a line-0 placeholder (which would consume bp1).
+  mock.emit('Debugger.scriptParsed', { scriptId: 's1', url: ABS_PATH, startLine: 0, startColumn: 0 });
+
+  // Nonzero bigint: JSC returns no serialized value, only description.
+  mock.reply('Debugger.evaluateOnCallFrame', { result: { type: 'bigint', description: '42n' }, wasThrown: false });
+  await adapter.setBreakpoints({
+    source: { path: ABS_PATH },
+    breakpoints: [{ line: BP_LINE, condition: 'n' }],
+  });
+  await adapter.configurationDone();
+  // Hit the armed bp (bp1 from armCounter).
+  mock.emit('Debugger.paused', makePause(BP_LINE - 1, 'Breakpoint', { breakpoints: ['bp1'] }));
+  await delay(50);
+  // Pre-fix: !!undefined === false → resume swallowed the stop.
+  expect(log.stopped.length, 'nonzero bigint condition should stop').toBe(1);
+
+  // Now 0n: falsy, must NOT stop.
+  log.stopped.length = 0;
+  mock.reply('Debugger.evaluateOnCallFrame', { result: { type: 'bigint', description: '0n' }, wasThrown: false });
+  mock.emit('Debugger.paused', makePause(BP_LINE - 1, 'Breakpoint', { breakpoints: ['bp1'] }));
+  await delay(50);
+  expect(log.stopped.length, '0n condition should not stop').toBe(0);
+}, 10_000);
+
+test('L9: condition truthiness: symbol always stops', async () => {
+  const mock = new MockInspector();
+  const { host, log } = recordingHost();
+  armCounter(mock, 'bp');
+  mock.reply('Debugger.resume', undefined);
+  const { adapter } = await mountAdapter(mock, host);
+
+  mock.emit('Debugger.scriptParsed', { scriptId: 's1', url: ABS_PATH, startLine: 0, startColumn: 0 });
+  // Symbols have no value field; they are always truthy.
+  mock.reply('Debugger.evaluateOnCallFrame', { result: { type: 'symbol', description: 'Symbol()' }, wasThrown: false });
+  await adapter.setBreakpoints({
+    source: { path: ABS_PATH },
+    breakpoints: [{ line: BP_LINE, condition: 'sym' }],
+  });
+  await adapter.configurationDone();
+  mock.emit('Debugger.paused', makePause(BP_LINE - 1, 'Breakpoint', { breakpoints: ['bp1'] }));
+  await delay(50);
+  expect(log.stopped.length, 'symbol condition should stop').toBe(1);
+}, 10_000);
