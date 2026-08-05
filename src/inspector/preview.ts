@@ -29,7 +29,9 @@ function formatPreview(preview: ObjectPreview | undefined): string {
  * Primitives show their value (strings quoted), objects/functions their
  * description, with a small preview tail for collections.
  */
-export function formatRemoteObject(obj: RemoteObject): string {
+export function formatRemoteObject(obj: RemoteObject | undefined): string {
+  // Getter-only accessors come back without a `value`; JSC omits it entirely.
+  if (obj === undefined) return '(getter)';
   switch (obj.type) {
     case 'undefined':
       return 'undefined';
@@ -38,7 +40,9 @@ export function formatRemoteObject(obj: RemoteObject): string {
     case 'boolean':
     case 'number':
     case 'bigint':
-      return String(obj.value);
+      // Unserializable values (bigint, NaN, ±Infinity) carry no `value`;
+      // JSC always provides the printable form in `description`.
+      return String(obj.value ?? obj.description ?? obj.type);
     case 'symbol':
       return obj.description ?? 'Symbol()';
     case 'function': {

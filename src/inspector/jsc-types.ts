@@ -52,7 +52,7 @@ export interface Scope {
 
 export interface PropertyDescriptor {
   name: string;
-  value: RemoteObject;
+  value?: RemoteObject;
   writable?: boolean;
   configurable?: boolean;
   enumerable?: boolean;
