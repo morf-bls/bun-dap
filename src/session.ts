@@ -215,9 +215,13 @@ export class BunDapSession extends LoggingDebugSession {
     }
   }
 
-  protected scopesRequest(response: DebugProtocol.ScopesResponse, args: DebugProtocol.ScopesArguments): void {
-    response.body = { scopes: this.getAdapter().scopes(args.frameId) };
-    this.sendResponse(response);
+  protected async scopesRequest(response: DebugProtocol.ScopesResponse, args: DebugProtocol.ScopesArguments): Promise<void> {
+    try {
+      response.body = { scopes: await this.getAdapter().scopes(args.frameId) };
+      this.sendResponse(response);
+    } catch (err) {
+      this.sendErrorResponse(response, 1006, (err as Error).message);
+    }
   }
 
   protected async variablesRequest(response: DebugProtocol.VariablesResponse, args: DebugProtocol.VariablesArguments): Promise<void> {

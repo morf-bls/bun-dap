@@ -10,6 +10,16 @@ import { SourceMap, NoopSourceMap, type AnySourceMap } from '../sourcemap';
 import { getAvailablePort } from '../util/port';
 import { isLoopbackHost } from '../util/loopback';
 
+/**
+ * Collections with at least this many properties advertise
+ * `indexedVariables` so a compliant DAP client pages with start/count. Below
+ * it the field is omitted to keep responses clean. The L29 slicing honors
+ * any start/count a client sends regardless, but without advertised counts a
+ * well-behaved client never sends them — so this threshold makes the paging
+ * reachable rather than dead code.
+ */
+const PAGING_THRESHOLD = 100;
+
 // ---------------------------------------------------------------------------
 // Host interface — the session supplies these by constructing DAP events.
 // ---------------------------------------------------------------------------
@@ -1355,10 +1365,10 @@ export class BunDebugAdapter {
     return { stackFrames, totalFrames: this.currentCallFrames.length };
   }
 
-  scopes(frameId: number): DebugProtocol.Scope[] {
+  async scopes(frameId: number): Promise<DebugProtocol.Scope[]> {
     const frame = this.frameIdToCallFrame.get(frameId);
     if (!frame) return [];
-    return frame.scopeChain.map((scope, i) => {
+    const scopes: DebugProtocol.Scope[] = frame.scopeChain.map((scope, i) => {
       const objectId = scope.object?.objectId;
       const variablesReference = objectId ? this.objectRefs.create({ objectId, callFrameId: frame.callFrameId }) : 0;
       // JSC/Bun emits the function-local scope as the first `closure`; DAP
@@ -1370,6 +1380,35 @@ export class BunDebugAdapter {
         expensive: scope.type === 'global' || scope.type === 'script',
       };
     });
+    // Advertise indexedVariables on scopes whose property list exceeds the
+    // paging threshold, so a compliant DAP client sends start/count and the
+    // L29 slicing becomes reachable (otherwise the client never pages and
+    // the whole collection is dumped in one response). The count is free —
+    // Runtime.getDisplayableProperties returns the full list each call.
+    await Promise.all(scopes.map(async (s) => {
+      if (s.variablesReference <= 0) return;
+      const n = await this.childCount(this.objectRefs.get(s.variablesReference, undefined as { objectId: string } | undefined)?.objectId ?? '');
+      if (n >= PAGING_THRESHOLD) s.indexedVariables = n;
+    }));
+    return scopes;
+  }
+
+  /**
+   * Count the displayable properties of `objectId` (own + internal). Returns
+   * 0 for a missing/empty result OR a failed fetch (e.g. inspector mid-close),
+   * so callers (scopes/variables/evaluate) can gate the indexedVariables
+   * advertisement without guarding the fetch — a count failure just means we
+   * skip the advertisement, never that the parent operation rejects.
+   */
+  private async childCount(objectId: string): Promise<number> {
+    if (!objectId) return 0;
+    try {
+      const props = await this.requireInspector().send('Runtime.getDisplayableProperties', { objectId, ownProperties: true, generatePreview: true });
+      if (!props) return 0;
+      return [...(props.properties ?? props.result ?? []), ...(props.internalProperties ?? [])].length;
+    } catch {
+      return 0;
+    }
   }
 
   async variables(args: { variablesReference: number; start?: number; count?: number }): Promise<DebugProtocol.Variable[]> {
@@ -1383,12 +1422,23 @@ export class BunDebugAdapter {
     const start = args.start ?? 0;
     const count = args.count ?? all.length;
     const page = all.slice(start, start + count);
-    return page.map((p) => ({
+    const vars: DebugProtocol.Variable[] = page.map((p) => ({
       name: p.name,
       value: formatRemoteObject(p.value),
       variablesReference: p.value?.objectId ? this.objectRefs.create({ objectId: p.value.objectId }) : 0,
       type: p.value?.type,
     }));
+    // Advertise indexedVariables on each returned child that itself has an
+    // objectId (hence children), so the client pages ITS children. The count
+    // is fetched per expandable child; this is N fetches only for children the
+    // client is about to expand anyway. Parallelized to avoid serial latency.
+    await Promise.all(vars.map(async (v) => {
+      if (v.variablesReference <= 0) return;
+      const childId = this.objectRefs.get(v.variablesReference, undefined as { objectId: string } | undefined)?.objectId ?? '';
+      const n = await this.childCount(childId);
+      if (n >= PAGING_THRESHOLD) v.indexedVariables = n;
+    }));
+    return vars;
   }
 
   async evaluate(args: { expression: string; frameId?: number; context?: string }): Promise<DebugProtocol.EvaluateResponse['body']> {
@@ -1420,10 +1470,18 @@ export class BunDebugAdapter {
     if (res.wasThrown) {
       throw new Error(res.result?.description ?? describeException(res.result));
     }
-    return {
+    const variablesReference = res.result?.objectId ? this.objectRefs.create({ objectId: res.result.objectId }) : 0;
+    const body: DebugProtocol.EvaluateResponse['body'] = {
       result: formatRemoteObject(res.result),
-      variablesReference: res.result?.objectId ? this.objectRefs.create({ objectId: res.result.objectId }) : 0,
+      variablesReference,
     };
+    // Advertise the child count on a large evaluate result so the client
+    // pages its properties (same contract as scopes/variables).
+    if (variablesReference > 0 && res.result?.objectId) {
+      const n = await this.childCount(res.result.objectId);
+      if (n >= PAGING_THRESHOLD) body.indexedVariables = n;
+    }
+    return body;
   }
 
   // ------------------------------------------------------------------

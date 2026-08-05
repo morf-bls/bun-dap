@@ -4,7 +4,7 @@ import { join, resolve as resolvePath } from 'node:path';
 
 import { test, expect } from 'bun:test';
 import { PassThrough } from 'node:stream';
-import type { PausedEvent } from '../src/inspector/jsc-types';
+import type { PausedEvent, RemoteObject } from '../src/inspector/jsc-types';
 import { MockInspector, recordingHost, mountAdapter, delay } from './util/mock-inspector';
 
 // Unit-style adapter tests for the 2026-08 review pass. These drive the
@@ -701,7 +701,7 @@ test('L29: variables honors start/count paging', async () => {
   mock.emit('Debugger.paused', pause);
   await delay(50);
 
-  const local = adapter.scopes(1).find((s) => s.name === 'Local');
+  const local = (await adapter.scopes(1)).find((s) => s.name === 'Local');
   expect(local, 'local scope present').toBeDefined();
   const ref = local!.variablesReference;
   expect(ref, 'scope ref is a real object ref').toBeGreaterThan(0);
@@ -759,4 +759,62 @@ test('B2a: empty/non-absolute path frame IS internal', async () => {
   expect(stackFrames[0]!.presentationHint, 'empty path is subtle').toBe('subtle');
   expect(stackFrames[0]!.name, 'internal name').toBe('<internal>');
   expect(stackFrames[0]!.source, 'no source for internal').toBeUndefined();
+}, 10_000);
+
+// A4: scopes()/variables()/evaluate() must advertise indexedVariables when a
+// container exceeds the paging threshold (100), so a compliant DAP client
+// knows to send start/count. Without advertised counts the L29 slicing is
+// dead code — the client has no signal that the collection is large.
+test('A4: scope with >threshold properties advertises indexedVariables', async () => {
+  const mock = new MockInspector();
+  const { host } = recordingHost();
+  const { adapter } = await mountAdapter(mock, host);
+
+  const pause = makePause(0, 'Breakpoint', { breakpoints: ['bp1'] });
+  pause.callFrames[0]!.scopeChain = [{ type: 'local', object: { type: 'object', objectId: 'obj1' } }];
+  mock.emit('Debugger.paused', pause);
+  await delay(20);
+
+  // 150 properties → above the 100 threshold → indexedVariables advertised.
+  const big = Array.from({ length: 150 }, (_, i) => ({
+    name: String(i),
+    value: { type: 'number', value: i } as RemoteObject,
+  }));
+  mock.reply('Runtime.getDisplayableProperties', { properties: big });
+
+  const scopes = await adapter.scopes(1);
+  const local = scopes.find((s) => s.name === 'Local');
+  expect(local, 'local scope present').toBeDefined();
+  expect(local!.variablesReference, 'scope ref is a real object ref').toBeGreaterThan(0);
+  // 150 > 100 threshold → the count is advertised so clients page.
+  expect(local!.indexedVariables, 'advertised count for large scope').toBe(150);
+
+  // A start/count request now returns the requested window of the big list.
+  const page = await adapter.variables({ variablesReference: local!.variablesReference, start: 10, count: 5 });
+  expect(page.length, 'paged window length').toBe(5);
+  expect(page.map((v) => v.name), 'paged window names').toEqual(['10', '11', '12', '13', '14']);
+}, 10_000);
+
+test('A4: scope with <=threshold properties does NOT advertise counts', async () => {
+  const mock = new MockInspector();
+  const { host } = recordingHost();
+  const { adapter } = await mountAdapter(mock, host);
+
+  const pause = makePause(0, 'Breakpoint', { breakpoints: ['bp1'] });
+  pause.callFrames[0]!.scopeChain = [{ type: 'local', object: { type: 'object', objectId: 'obj2' } }];
+  mock.emit('Debugger.paused', pause);
+  await delay(20);
+
+  // 10 properties → below threshold → keep the response clean (no count field).
+  const small = Array.from({ length: 10 }, (_, i) => ({
+    name: `p${i}`,
+    value: { type: 'number', value: i } as RemoteObject,
+  }));
+  mock.reply('Runtime.getDisplayableProperties', { properties: small });
+
+  const scopes = await adapter.scopes(1);
+  const local = scopes.find((s) => s.name === 'Local');
+  expect(local, 'local scope present').toBeDefined();
+  expect(local!.variablesReference, 'scope ref is a real object ref').toBeGreaterThan(0);
+  expect(local!.indexedVariables, 'no count advertised below threshold').toBeUndefined();
 }, 10_000);
