@@ -90,6 +90,12 @@ bun run src/cli.ts 4711 0.0.0.0
 `stdout` carries **only** framed DAP messages; all diagnostics go to `stderr`.
 This is deliberate and load-bearing — AI agents parse `stdout` as pure DAP.
 
+> [!WARNING]
+> Binding the TCP server to a non-loopback address (`0.0.0.0`) exposes an
+> **unauthenticated remote code execution** surface: any reachable client can
+> use `evaluate` to run arbitrary code in the debuggee. Keep the default
+> `127.0.0.1` binding unless you are on a trusted, isolated network.
+
 ## Usage scenarios
 
 ### Scenario A — Neovim (`nvim-dap`)
@@ -265,13 +271,18 @@ breakpoints (`all`/`uncaught`).
 `configurationDone`, `threads`, `stackTrace`, `scopes`, `variables`,
 `evaluate`, `continue`, `next`, `stepIn`, `stepOut`, `pause`.
 
+**Conditional & logpoint cost:** Bun/JSC 1.3.x ignores the `condition` and
+`isAutoContinue` breakpoint parameters, so the adapter evaluates conditions
+itself: every hit costs one pause+resume inspector RPC round-trip. A
+conditional or logpoint breakpoint in a tight loop (thousands of iterations)
+pays that overhead per hit — keep them out of hot loops.
+
 **Events:** `initialized`, `stopped`, `terminated`, `exited`, `thread`,
 `process`, `output` (stdout/stderr/console — incl. logpoints), `breakpoint`
 (changed when a deferred breakpoint verifies).
 
-**Exception filters:** `all` and `uncaught`. Bun/JSC pauses on all exceptions
-when either is enabled — there is no clean uncaught-only mode, and the
-`uncaught` filter label says so.
+**Exception filters:** `all` and `uncaught`. `all` pauses on every thrown
+exception; `uncaught` pauses only on uncaught ones.
 
 **Deliberately unsupported** (advertised `false` in capabilities):
 `source`, `goto`/`gotoTargets`, `completions`, `setVariable`, `setExpression`,

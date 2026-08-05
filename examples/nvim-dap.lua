@@ -10,7 +10,7 @@ local dap = require('dap')
 dap.adapters.bun = {
   type = 'executable',
   command = 'bun',
-  args = { 'run', '/Users/kretek/workspace/sources/bun-dap/src/cli.ts' },
+  args = { 'run', '/path/to/bun-dap/src/cli.ts' },
 }
 
 dap.configurations.typescript = {

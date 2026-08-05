@@ -2,7 +2,7 @@
   "adapters": {
     "bun-dap": {
       "command": "bun",
-      "args": ["run", "/Users/kretek/workspace/sources/bun-dap/src/cli.ts", "${port}", "127.0.0.1"],
+      "args": ["run", "/path/to/bun-dap/src/cli.ts", "${port}", "127.0.0.1"],
       "connectMode": "tcp",
       "languages": ["typescript", "javascript"],
       "fileTypes": [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"],

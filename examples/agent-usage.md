@@ -81,8 +81,8 @@ Spawn the adapter: `bun run /path/to/bun-dap/src/cli.ts` (no args = stdio mode).
    {"type":"event","event":"stopped","body":{"reason":"breakpoint","threadId":1,"hitBreakpointIds":[1]}}
    ```
 
-   `reason` is `breakpoint`, `exception`, `entry` (stopOnEntry), `pause`
-   (manual pause / debugger statement), or `function breakpoint`.
+   `reason` is `breakpoint` (including `debugger;` statements), `exception`,
+   `entry` (stopOnEntry), `pause` (manual pause), or `function breakpoint`.
 
 7. **Inspect while paused** — the waterfall:
 
