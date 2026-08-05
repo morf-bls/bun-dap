@@ -173,6 +173,7 @@ export interface DevRequestMap {
     params: RuntimeGetDisplayablePropertiesParams;
     result: RuntimeGetDisplayablePropertiesResult;
   };
+  'Runtime.releaseObjectGroup': { params: { objectGroupName: string }; result: undefined };
   'Console.enable': { params?: undefined; result: undefined };
   'Debugger.enable': { params?: undefined; result: undefined };
   'Debugger.setBreakpointsActive': { params: { active: boolean }; result: undefined };

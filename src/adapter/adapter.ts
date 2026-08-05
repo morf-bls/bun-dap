@@ -450,6 +450,7 @@ export class BunDebugAdapter {
     // mislabel a later manual pause as 'step'. resumeInternal clears it for
     // the swallow paths for the same reason.
     this.stepPending = false;
+    this.releaseObjectGroups();
     await this.inspector?.send('Debugger.resume');
     // JSC may omit Debugger.resumed (see clearPauseState); clear eagerly.
     this.clearPauseState();
@@ -461,6 +462,7 @@ export class BunDebugAdapter {
     // reason as a Debugger.pause brake — so mapStopReason needs this flag to
     // tell them apart. nvim-dap only re-renders the cursor on reason 'step'.
     this.stepPending = true;
+    this.releaseObjectGroups();
     try {
       await this.inspector?.send('Debugger.stepNext');
     } catch (err) {
@@ -477,6 +479,7 @@ export class BunDebugAdapter {
 
   async stepIn(): Promise<void> {
     this.stepPending = true;
+    this.releaseObjectGroups();
     try {
       await this.inspector?.send('Debugger.stepInto');
     } catch (err) {
@@ -488,6 +491,7 @@ export class BunDebugAdapter {
 
   async stepOut(): Promise<void> {
     this.stepPending = true;
+    this.releaseObjectGroups();
     try {
       await this.inspector?.send('Debugger.stepOut');
     } catch (err) {
@@ -1266,6 +1270,23 @@ export class BunDebugAdapter {
     this.clearPauseState();
   }
 
+  /**
+   * Release the object groups `evaluate` creates ('repl'/'debugger'/'console')
+   * so the DEBUGGEE does not retain evaluated objects across pauses: JSC
+   * keeps group members alive until releaseObjectGroup, so without this
+   * every evaluate leaks the referenced objects in the target (L28). Called
+   * on every resume/step path — the groups are dead weight once running.
+   * Fire-and-forget: a failure (e.g. inspector mid-close) must not block the
+   * resume. Sent before the resume RPC so JSC releases while still paused.
+   */
+  private releaseObjectGroups(): void {
+    const inspector = this.inspector;
+    if (!inspector) return;
+    for (const objectGroupName of ['repl', 'debugger', 'console']) {
+      void inspector.send('Runtime.releaseObjectGroup', { objectGroupName }).catch(() => {});
+    }
+  }
+
   private async resumeInternal(): Promise<void> {
     // Swallow resumes (brake/placeholder/logpoint/condition-gating) cancel
     // any in-flight step just like a client continue: every swallow path is
@@ -1275,6 +1296,7 @@ export class BunDebugAdapter {
     // manual pause as 'step' (logstep probe: stepping over a logpoint line
     // printed the log and ran free, step absorbed).
     this.stepPending = false;
+    this.releaseObjectGroups();
     await this.requireInspector().send('Debugger.resume');
     this.clearPauseState();
   }
