@@ -876,10 +876,12 @@ export class BunDebugAdapter {
     const inspector = this.requireInspector();
     let requested = args.breakpoints;
 
-    // Remove symbolic breakpoints not in the new set.
-    const wanted = new Set(requested.map((b) => b.name));
+    // Remove symbolic breakpoints not in the new set, and ones whose gating
+    // changed: a re-sent symbol with a new condition/hitCondition must be
+    // re-armed, not silently kept with the old gating (L26).
     for (const [key, bp] of [...this.functionBreakpoints]) {
-      if (wanted.has(bp.symbol)) {
+      const incoming = requested.find((r) => r.name === bp.symbol);
+      if (incoming !== undefined && incoming.condition === bp.condition && incoming.hitCondition === bp.hitCondition) {
         requested = requested.filter((r) => r.name !== bp.symbol); // keep existing
         continue;
       }
