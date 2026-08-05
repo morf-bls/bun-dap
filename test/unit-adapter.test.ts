@@ -684,3 +684,35 @@ test('L28: resume releases evaluate object groups so the debuggee drops retained
   const total = mock.sent.filter((s) => s.method === 'Runtime.releaseObjectGroup');
   expect(total.length, 'step paths release the groups too').toBe(6);
 }, 10_000);
+
+test('L29: variables honors start/count paging', async () => {
+  const mock = new MockInspector();
+  const { host } = recordingHost();
+  armCounter(mock, 'bp');
+  mock.reply('Debugger.resume', undefined);
+  const { adapter } = await mountAdapter(mock, host);
+
+  mock.emit('Debugger.scriptParsed', { scriptId: 's1', url: ABS_PATH, startLine: 0, startColumn: 0 });
+  await adapter.setBreakpoints({ source: { path: ABS_PATH }, breakpoints: [{ line: BP_LINE }] });
+  await adapter.configurationDone();
+  // Pause with a real local scope so scopes() hands out an object ref.
+  const pause = makePause(BP_LINE - 1, 'Breakpoint', { breakpoints: ['bp1'] });
+  pause.callFrames[0]!.scopeChain = [{ type: 'closure', object: { type: 'object', objectId: 'scope1' } }];
+  mock.emit('Debugger.paused', pause);
+  await delay(50);
+
+  const local = adapter.scopes(1).find((s) => s.name === 'Local');
+  expect(local, 'local scope present').toBeDefined();
+  const ref = local!.variablesReference;
+  expect(ref, 'scope ref is a real object ref').toBeGreaterThan(0);
+
+  const props = Array.from({ length: 10 }, (_, i) => ({
+    name: `p${i}`,
+    value: { type: 'number', value: i },
+  }));
+  mock.reply('Runtime.getDisplayableProperties', { properties: props });
+
+  // Pre-fix: the whole list was dumped regardless of start/count.
+  const page = await adapter.variables({ variablesReference: ref, start: 2, count: 3 });
+  expect(page.map((v) => v.name), 'start/count slice').toEqual(['p2', 'p3', 'p4']);
+}, 10_000);

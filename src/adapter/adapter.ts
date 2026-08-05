@@ -1062,6 +1062,8 @@ export class BunDebugAdapter {
     ];
     const hitLineEntries = hitKeys.map((k) => this.lineBreakpoints.get(k)).filter((b): b is LineBreakpoint => !!b);
     const hitFnEntries = hitKeys.map((k) => this.functionBreakpoints.get(k)).filter((b): b is FunctionBreakpoint => !!b);
+    for (const bp of hitLineEntries) bp.hitCount++;
+    for (const bp of hitFnEntries) bp.hitCount++;
 
     // Hit-count gating (line + function). Several bps can share one pause
     // (two bps on one statement via the brake overlap, or an alias), so stop
@@ -1369,12 +1371,18 @@ export class BunDebugAdapter {
     });
   }
 
-  async variables(variablesReference: number): Promise<DebugProtocol.Variable[]> {
-    const entry = this.objectRefs.get(variablesReference, undefined as { objectId: string } | undefined);
+  async variables(args: { variablesReference: number; start?: number; count?: number }): Promise<DebugProtocol.Variable[]> {
+    const entry = this.objectRefs.get(args.variablesReference, undefined as { objectId: string } | undefined);
     if (!entry) return [];
     const props = await this.requireInspector().send('Runtime.getDisplayableProperties', { objectId: entry.objectId, ownProperties: true, generatePreview: true });
     const all = [...(props.properties ?? props.result ?? []), ...(props.internalProperties ?? [])];
-    return all.map((p) => ({
+    // DAP paging: honor the client's start/count window (L29) so a huge
+    // collection is not dumped in one response; slice before formatting so
+    // only the requested rows get object refs.
+    const start = args.start ?? 0;
+    const count = args.count ?? all.length;
+    const page = all.slice(start, start + count);
+    return page.map((p) => ({
       name: p.name,
       value: formatRemoteObject(p.value),
       variablesReference: p.value?.objectId ? this.objectRefs.create({ objectId: p.value.objectId }) : 0,

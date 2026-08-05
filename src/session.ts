@@ -222,7 +222,13 @@ export class BunDapSession extends LoggingDebugSession {
 
   protected async variablesRequest(response: DebugProtocol.VariablesResponse, args: DebugProtocol.VariablesArguments): Promise<void> {
     try {
-      response.body = { variables: await this.getAdapter().variables(args.variablesReference) };
+      response.body = {
+        variables: await this.getAdapter().variables({
+          variablesReference: args.variablesReference,
+          start: args.start,
+          count: args.count,
+        }),
+      };
       this.sendResponse(response);
     } catch (err) {
       this.sendErrorResponse(response, 1006, (err as Error).message);
