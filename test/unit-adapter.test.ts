@@ -447,3 +447,34 @@ test('L16: terminateDebuggee accepts IPv6 loopback [::1]', async () => {
   expect(threw, 'should not throw loopback refusal for [::1]').toBe(false);
   expect(msg, '').toBe('');
 }, 10_000);
+
+test('L17: evaluate with stale/unknown frameId throws, not global scope', async () => {
+  const mock = new MockInspector();
+  const { host } = recordingHost();
+  armCounter(mock, 'bp');
+  mock.reply('Debugger.resume', undefined);
+  const { adapter } = await mountAdapter(mock, host);
+
+  mock.emit('Debugger.scriptParsed', { scriptId: 's1', url: ABS_PATH, startLine: 0, startColumn: 0 });
+  await adapter.setBreakpoints({ source: { path: ABS_PATH }, breakpoints: [{ line: BP_LINE }] });
+  await adapter.configurationDone();
+  // A real bp hit pauses and populates frameIdToCallFrame with id 1.
+  mock.emit('Debugger.paused', makePause(BP_LINE - 1, 'Breakpoint', { breakpoints: ['bp1'] }));
+  await delay(50);
+
+  // frameId 999 was never issued. Pre-fix the else branch silently
+  // evaluated the expression in global scope; it must throw instead.
+  let threw = false;
+  let msg = '';
+  try {
+    await adapter.evaluate({ expression: 'x', frameId: 999 });
+  } catch (err) {
+    threw = true;
+    msg = (err as Error).message;
+  }
+  expect(threw, 'stale frameId should throw').toBe(true);
+  expect(msg.toLowerCase()).toContain('frame');
+  // No Runtime.evaluate should have been sent for the stale frame.
+  const runtimeEvals = mock.sent.filter((s) => s.method === 'Runtime.evaluate');
+  expect(runtimeEvals.length, 'no global-scope Runtime.evaluate for stale frame').toBe(0);
+}, 10_000);

@@ -1306,8 +1306,12 @@ export class BunDebugAdapter {
   async evaluate(args: { expression: string; frameId?: number; context?: string }): Promise<DebugProtocol.EvaluateResponse['body']> {
     const inspector = this.requireInspector();
     let res: { result: RemoteObject; wasThrown?: boolean };
-    if (this.paused && args.frameId !== undefined && this.frameIdToCallFrame.has(args.frameId)) {
-      const frame = this.frameIdToCallFrame.get(args.frameId)!;
+    if (this.paused && args.frameId !== undefined) {
+      // A frameId the client believes is current but we never issued (or
+      // already cleared on resume) is stale: evaluating it in global scope
+      // would silently lose the frame context and misreport locals. Refuse.
+      const frame = this.frameIdToCallFrame.get(args.frameId);
+      if (!frame) throw new Error(`evaluate: unknown frameId ${args.frameId} (the target is no longer paused there)`);
       res = await inspector.send('Debugger.evaluateOnCallFrame', {
         callFrameId: frame.callFrameId,
         expression: args.expression,
