@@ -31,7 +31,12 @@ Spawn the adapter: `bun run /path/to/bun-dap/src/cli.ts` (no args = stdio mode).
 1. **initialize** — the handshake; read the capabilities:
 
    ```json
-   {"seq":1,"type":"request","command":"initialize","arguments":{"adapterID":"bun-dap","pathFormat":"path","linesStartAt1":true,"columnsStartAt1":true}}
+   {
+     "seq": 1,
+     "type": "request",
+     "command": "initialize",
+     "arguments": { "adapterID": "bun-dap", "pathFormat": "path", "linesStartAt1": true, "columnsStartAt1": true }
+   }
    ```
 
    Response `body` advertises `supportsConfigurationDoneRequest`, conditional /
@@ -41,11 +46,22 @@ Spawn the adapter: `bun run /path/to/bun-dap/src/cli.ts` (no args = stdio mode).
 2. **launch** (or **attach**):
 
    ```json
-   {"seq":2,"type":"request","command":"launch","arguments":{"program":"/abs/path/app.ts","cwd":"/abs/workdir","runtime":"bun","stopOnEntry":false,"noDebug":false}}
+   {
+     "seq": 2,
+     "type": "request",
+     "command": "launch",
+     "arguments": {
+       "program": "/abs/path/app.ts",
+       "cwd": "/abs/workdir",
+       "runtime": "bun",
+       "stopOnEntry": false,
+       "noDebug": false
+     }
+   }
    ```
 
    ```json
-   {"seq":2,"type":"request","command":"attach","arguments":{"url":"ws://127.0.0.1:6499/<uuid>"}}
+   { "seq": 2, "type": "request", "command": "attach", "arguments": { "url": "ws://127.0.0.1:6499/<uuid>" } }
    ```
 
    The `attach` url is the one `bun --inspect` prints on stderr.
@@ -56,7 +72,12 @@ Spawn the adapter: `bun run /path/to/bun-dap/src/cli.ts` (no args = stdio mode).
 4. **setBreakpoints** — full replacement per file:
 
    ```json
-   {"seq":3,"type":"request","command":"setBreakpoints","arguments":{"source":{"path":"/abs/path/app.ts"},"breakpoints":[{"line":12}]}}
+   {
+     "seq": 3,
+     "type": "request",
+     "command": "setBreakpoints",
+     "arguments": { "source": { "path": "/abs/path/app.ts" }, "breakpoints": [{ "line": 12 }] }
+   }
    ```
 
    If the module has not parsed yet (typical: `--inspect-wait` before
@@ -78,7 +99,7 @@ Spawn the adapter: `bun run /path/to/bun-dap/src/cli.ts` (no args = stdio mode).
 6. **Wait for `stopped`** when a breakpoint hits:
 
    ```json
-   {"type":"event","event":"stopped","body":{"reason":"breakpoint","threadId":1,"hitBreakpointIds":[1]}}
+   { "type": "event", "event": "stopped", "body": { "reason": "breakpoint", "threadId": 1, "hitBreakpointIds": [1] } }
    ```
 
    `reason` is `breakpoint` (including `debugger;` statements), `exception`,
@@ -113,7 +134,15 @@ hit), and `logMessage` (template with `${expr}` interpolation; prints an
 `output` event `category:"console"` and **never stops**):
 
 ```json
-{"seq":3,"type":"request","command":"setBreakpoints","arguments":{"source":{"path":"/abs/path/app.ts"},"breakpoints":[{"line":12,"logMessage":"hit: ${name}"}]}}
+{
+  "seq": 3,
+  "type": "request",
+  "command": "setBreakpoints",
+  "arguments": {
+    "source": { "path": "/abs/path/app.ts" },
+    "breakpoints": [{ "line": 12, "logMessage": "hit: ${name}" }]
+  }
+}
 ```
 
 ## TCP mode

@@ -22,47 +22,47 @@
 //   - evaluate while paused, e.g. "subtotal.toFixed(2)" inside applyDiscount
 
 function applyDiscount(price: number, quantity: number): number {
-  const rate = 0.2; // 20% off
-  const subtotal = price * quantity;
-  return subtotal * rate; // BUG: should be subtotal * (1 - rate)
+    const rate = 0.2; // 20% off
+    const subtotal = price * quantity;
+    return subtotal * rate; // BUG: should be subtotal * (1 - rate)
 }
 
 function computeAverage(values: number[]): number {
-  let sum = 0;
-  for (const value of values) {
-    sum += value;
-  }
-  return sum / values.length + 1; // BUG: +1 lands outside the division
+    let sum = 0;
+    for (const value of values) {
+        sum += value;
+    }
+    return sum / values.length + 1; // BUG: +1 lands outside the division
 }
 
 function fibonacci(n: number): number {
-  let a = 0;
-  let b = 1;
-  for (let i = 0; i <= n; i++) {
-    [a, b] = [b, a + b];
-  }
-  return a; // BUG: loop runs one step too far (i <= n instead of i < n)
+    let a = 0;
+    let b = 1;
+    for (let i = 0; i <= n; i++) {
+        [a, b] = [b, a + b];
+    }
+    return a; // BUG: loop runs one step too far (i <= n instead of i < n)
 }
 
 function makeCounter(start: number) {
-  let count = start; // closure variable: lands in a Closure scope, not Local
-  return function step(delta: number): number {
-    count -= delta; // BUG: sign flipped; should be +=
-    return count;
-  };
+    let count = start; // closure variable: lands in a Closure scope, not Local
+    return function step(delta: number): number {
+        count -= delta; // BUG: sign flipped; should be +=
+        return count;
+    };
 }
 
 const prices = [19.99, 5.5, 120, 0.99];
 const quantities = [2, 4, 1, 3];
 
-const totals = prices.map((price, i) => applyDiscount(price, quantities[i]!));
+const totals = prices.map((price, i) => applyDiscount(price, quantities[i] ?? 0));
 const average = computeAverage(totals);
 const fib = fibonacci(10);
 const counter = makeCounter(average);
 
-console.log(`totals:  ${totals.join(", ")}`);
+console.log(`totals:  ${totals.join(', ')}`);
 console.log(`average: ${average.toFixed(2)}  (bug: +1 after the division)`);
 console.log(`fib(10): ${fib}  (bug: should be 55)`);
 console.log(`counter: ${counter(2)}, ${counter(5)}  (bug: decrements instead of incrementing)`);
 
-throw new Error("intentional crash — exercise exception breakpoints (all/uncaught)");
+throw new Error('intentional crash — exercise exception breakpoints (all/uncaught)');

@@ -4,5 +4,5 @@
  * (adapter.ts) so the loopback set has one source of truth.
  */
 export function isLoopbackHost(host: string): boolean {
-  return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]';
+    return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]';
 }

@@ -9,13 +9,13 @@
 import nodePath from 'node:path';
 
 function compute(i: number): number {
-  const p = nodePath.join('/tmp', `case-${i}`);
-  return p.length + i;
+    const p = nodePath.join('/tmp', `case-${i}`);
+    return p.length + i;
 }
 
 let total = 0;
 for (let i = 0; i < 100; i++) {
-  total += compute(i);
+    total += compute(i);
 }
 
 console.log('imports fixture done', total);

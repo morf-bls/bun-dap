@@ -1,24 +1,36 @@
 {
-  "name": "bun-dap",
-  "version": "0.1.0",
-  "type": "module",
-  "bin": {
-    "bun-dap": "src/cli.ts"
-  },
-  "scripts": {
-    "test": "bun test",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "build": "bun build src/cli.ts --target=bun --outfile dist/bun-dap"
-  },
-  "dependencies": {
-    "@vscode/debugadapter": "^1.68.0",
-    "@vscode/debugprotocol": "^1.68.0",
-    "ws": "^8.18.0",
-    "source-map-js": "^1.0.2"
-  },
-  "devDependencies": {
-    "@types/ws": "^8.5.10",
-    "@types/bun": "^1.1.0",
-    "typescript": "^5.6.0"
-  }
+    "name": "bun-dap",
+    "version": "0.1.0",
+    "type": "module",
+    "bin": {
+        "bun-dap": "src/cli.ts"
+    },
+    "scripts": {
+        "test": "bun test",
+        "typecheck": "tsc --noEmit -p tsconfig.json",
+        "build": "bun build src/cli.ts --target=bun --outfile dist/bun-dap",
+        "format": "prettier --write --log-level silent . && eslint --quiet --fix --fix-type layout .",
+        "lint": "eslint . --max-warnings=0; tsc --noEmit -p tsconfig.json"
+    },
+    "dependencies": {
+        "@vscode/debugadapter": "^1.68.0",
+        "@vscode/debugprotocol": "^1.68.0",
+        "ws": "^8.18.0",
+        "source-map-js": "^1.0.2"
+    },
+    "devDependencies": {
+        "@eslint/js": "^10.0.1",
+        "@trivago/prettier-plugin-sort-imports": "^6.0.2",
+        "@types/bun": "^1.1.0",
+        "@types/lodash": "^4.17.25",
+        "@types/ws": "^8.5.10",
+        "eslint": "^10.8.0",
+        "eslint-config-prettier": "^10.1.8",
+        "eslint-plugin-prettier": "^5.5.6",
+        "jiti": "^2.7.0",
+        "lodash": "^4.18.1",
+        "prettier": "^3.9.6",
+        "typescript": "^5.6.0",
+        "typescript-eslint": "^8.66.0"
+    }
 }

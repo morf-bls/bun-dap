@@ -9,18 +9,18 @@
 // line 9
 
 function add(left: number, right: number): number {
-  const sum = left + right;
-  return sum;
+    const sum = left + right;
+    return sum;
 }
 
 function main(): void {
-  const first = add(1, 2);
-  const second = add(3, 4);
-  const total = first + second;
-  console.log(`total: ${total}`);
-  console.log(`total*2: ${total * 2}`);
-  console.log(`again: ${total}`);
-  console.log(`final: ${total}`);
+    const first = add(1, 2);
+    const second = add(3, 4);
+    const total = first + second;
+    console.log(`total: ${total}`);
+    console.log(`total*2: ${total * 2}`);
+    console.log(`again: ${total}`);
+    console.log(`final: ${total}`);
 }
 
 main();

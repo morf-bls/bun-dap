@@ -3,7 +3,7 @@
 A standalone, IDE-agnostic [Debug Adapter Protocol][dap] (DAP) **server** for [Bun][bun].
 
 bun-dap drives Bun's JavaScriptCore inspector (`--inspect`, `--inspect-wait`,
-`--inspect-brk`) and exposes the standard DAP over stdio or TCP — so *any* DAP
+`--inspect-brk`) and exposes the standard DAP over stdio or TCP — so _any_ DAP
 client gets launch/attach, source-mapped breakpoints, stepping, scopes &
 locals, and REPL evaluation for TypeScript and JavaScript running on Bun.
 
@@ -24,8 +24,8 @@ Three facts about the official stack explain why "just reuse it" doesn't work:
 
 1. **The VS Code extension hosts its adapter inline — there is no server to wrap.**
    [`features/debug.ts`][vscode-debug-ts] registers an `InlineDebugAdapterFactory`
-   that hands VS Code a `DebugAdapterInlineImplementation` running *inside the
-   extension host*, coupled to the `vscode` API (workspace config, terminals,
+   that hands VS Code a `DebugAdapterInlineImplementation` running _inside the
+   extension host_, coupled to the `vscode` API (workspace config, terminals,
    codelens, diagnostics). The [manifest's][vscode-pkg] static
    `program: "dist/adapter.js"` entry is never even built —
    [`build.mjs`][vscode-build-mjs] bundles only `extension.ts` and
@@ -54,18 +54,18 @@ or connect over TCP, running on the **Bun runtime** itself, built on Microsoft's
 [`@vscode/debugadapter`][vscode-da] framing, and shaped to be publishable and
 owned by its users.
 
-| | bun‑dap (this project) | [`bun-debug-adapter-protocol`][bdap] | [`bun-vscode`][bun-vscode] |
-|---|---|---|---|
-| What it is | Runnable DAP **server** | DAP⇄JSC engine **library** | VS Code **extension** |
-| Distribution | Publishable package + CLI | Unpublished monorepo lib (`0.0.1`) | VS Code Marketplace |
-| DAP transport | stdio **and** TCP | none (host calls methods in-process) | none (inline in extension host) |
-| Runs on | **Bun** | Bun or Node (as a library) | VS Code extension host |
-| Neovim / Helix / agents | ✅ | ❌ (nothing to spawn) | ❌ |
-| VS Code | ✅ (as a plain DAP server) | drives the extension | ✅ (native) |
-| DAP surface | core set, verified | broader (`setVariable`, `completions`, `exceptionInfo`, …) | broader |
-| Verified clients | nvim-dap, agent harnesses | VS Code only | VS Code only |
-| Test runner, error overlays, lockfile viewer | — | — | ✅ |
-| License / affiliation | MIT, independent community | MIT (Oven) | MIT (Oven) |
+|                                              | bun‑dap (this project)     | [`bun-debug-adapter-protocol`][bdap]                       | [`bun-vscode`][bun-vscode]      |
+| -------------------------------------------- | -------------------------- | ---------------------------------------------------------- | ------------------------------- |
+| What it is                                   | Runnable DAP **server**    | DAP⇄JSC engine **library**                                 | VS Code **extension**           |
+| Distribution                                 | Publishable package + CLI  | Unpublished monorepo lib (`0.0.1`)                         | VS Code Marketplace             |
+| DAP transport                                | stdio **and** TCP          | none (host calls methods in-process)                       | none (inline in extension host) |
+| Runs on                                      | **Bun**                    | Bun or Node (as a library)                                 | VS Code extension host          |
+| Neovim / Helix / agents                      | ✅                         | ❌ (nothing to spawn)                                      | ❌                              |
+| VS Code                                      | ✅ (as a plain DAP server) | drives the extension                                       | ✅ (native)                     |
+| DAP surface                                  | core set, verified         | broader (`setVariable`, `completions`, `exceptionInfo`, …) | broader                         |
+| Verified clients                             | nvim-dap, agent harnesses  | VS Code only                                               | VS Code only                    |
+| Test runner, error overlays, lockfile viewer | —                          | —                                                          | ✅                              |
+| License / affiliation                        | MIT, independent community | MIT (Oven)                                                 | MIT (Oven)                      |
 
 **Relationship to upstream.** [`bun-inspector-protocol`][bip] is already
 package-shaped (`files`, `LICENSE`, build script), so Oven appears to be
@@ -85,6 +85,7 @@ bun install
 bun run src/cli.ts          # stdio DAP server (default)
 bun run src/cli.ts 4711     # TCP DAP server on 127.0.0.1:4711
 bun run src/cli.ts 4711 0.0.0.0
+bun run src/cli.ts --help  # usage, flags, and security notes
 ```
 
 `stdout` carries **only** framed DAP messages; all diagnostics go to `stderr`.
@@ -134,7 +135,7 @@ dap.configurations.javascript = dap.configurations.typescript
 Full file: [`examples/nvim-dap.lua`](examples/nvim-dap.lua).
 
 > [!TIP]
-> Breakpoints set *before* the program parses report `verified:false` and flip
+> Breakpoints set _before_ the program parses report `verified:false` and flip
 > to `verified:true` via a `breakpoint` event once the script loads. This is
 > correct behavior — see [How it works](#how-it-works). If your DAP UI shows
 > "breakpoint not yet bound," just `continue` and let the deferred arm land.
@@ -186,14 +187,28 @@ logpoint flows, and TCP mode. A runnable end-to-end sequence lives in
 Example — set a conditional breakpoint and read locals while paused:
 
 ```json
-{"seq":3,"type":"request","command":"setBreakpoints","arguments":{
-  "source":{"path":"/abs/path/app.ts"},
-  "breakpoints":[{"line":12,"condition":"subtotal > 100"}]}}
+{
+  "seq": 3,
+  "type": "request",
+  "command": "setBreakpoints",
+  "arguments": {
+    "source": { "path": "/abs/path/app.ts" },
+    "breakpoints": [{ "line": 12, "condition": "subtotal > 100" }]
+  }
+}
 ```
 
 ```json
-{"seq":6,"type":"request","command":"evaluate","arguments":{
-  "expression":"subtotal.toFixed(2)","frameId":1,"context":"repl"}}
+{
+  "seq": 6,
+  "type": "request",
+  "command": "evaluate",
+  "arguments": {
+    "expression": "subtotal.toFixed(2)",
+    "frameId": 1,
+    "context": "repl"
+  }
+}
 ```
 
 ### Scenario D — any other DAP client
@@ -217,16 +232,16 @@ bun --inspect=127.0.0.1:6499 ./app.ts
 
 ### Launch arguments (DAP `launch`)
 
-| field         | meaning                                       | default         |
-|---------------|-----------------------------------------------|-----------------|
+| field         | meaning                                         | default         |
+| ------------- | ----------------------------------------------- | --------------- |
 | `program`     | absolute path of the TS/JS entry (**required**) | —               |
-| `args`        | argv for the program                          | `[]`            |
-| `cwd`         | working directory                             | `process.cwd()` |
-| `env`         | extra environment for the child              | inherited       |
-| `runtime`     | executable to run (defaults to `bun`)        | `bun`           |
-| `runtimeArgs` | flags before the program                      | `[]`            |
-| `stopOnEntry` | pause at program entry                        | `false`         |
-| `noDebug`     | run without inspector; breakpoints are inert | `false`         |
+| `args`        | argv for the program                            | `[]`            |
+| `cwd`         | working directory                               | `process.cwd()` |
+| `env`         | extra environment for the child                 | inherited       |
+| `runtime`     | executable to run (defaults to `bun`)           | `bun`           |
+| `runtimeArgs` | flags before the program                        | `[]`            |
+| `stopOnEntry` | pause at program entry                          | `false`         |
+| `noDebug`     | run without inspector; breakpoints are inert    | `false`         |
 
 ### Attach arguments (DAP `attach`)
 
@@ -239,15 +254,15 @@ leaves the target running; `terminateDebuggee: true` kills it.
 1. **`launch`** spawns `bun --inspect-wait=127.0.0.1:<port> program`, scrapes
    the `ws://` inspector URL off `stderr`, and connects.
 2. **Deferred breakpoints.** Breakpoints are set on the **TypeScript** path, but
-   JSC resolves URL-keyed breakpoints against *generated* lines, never TS lines.
+   JSC resolves URL-keyed breakpoints against _generated_ lines, never TS lines.
    Before the module parses (the `--inspect-wait` gate still closed), the
-   breakpoint is *deferred*: the adapter keeps it pending and reports
+   breakpoint is _deferred_: the adapter keeps it pending and reports
    `verified:false`. When the script parses, its inline source map is decoded
    **synchronously** from `scriptParsed.sourceMapURL` (no RPC), the breakpoint
    arms at its mapped generated coordinates, and a `breakpoint` changed event
    marks it `verified:true`. A one-shot pre-gate `Debugger.pause` freezes the
    entry module at its first statement until those arms land; if a breakpoint's
-   target *is* that statement, the pause stands in for its hit.
+   target _is_ that statement, the pause stands in for its hit.
 3. **`configurationDone`** sends `Debugger.setBreakpointsActive` +
    `Inspector.initialized` — the gate opens and the program runs.
 4. **On `Debugger.paused`**, hit breakpoints gate on `condition`/`hitCondition`,
@@ -331,8 +346,8 @@ test/                                end-to-end, attach, sourcemap, transport
 
 ## License
 
-MIT. bun-dap is an independent community project, unaffiliated with Oven
-Shark, Inc. Bun is a trademark of its respective owners.
+MIT. bun-dap is an independent community project, unaffiliated with Oven, Jarred Sumner nor Anthropic.
+Bun is a trademark of its respective owners.
 
 [dap]: https://microsoft.github.io/debug-adapter-protocol/
 [dap-implementations]: https://microsoft.github.io/debug-adapter-protocol/implementors/tools/

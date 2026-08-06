@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.omp/
+**/*.md
+**/*.d.ts
+**/*.generated.ts
+**/*.generated.js
+**/generated/**/*.js
+**/generated/**/*.ts
