@@ -169,7 +169,7 @@ export class BunDapSession extends LoggingDebugSession {
             }
             adapter.closeInspector();
         }
-        // A1: drop the cached adapter so a subsequent launch/attach on the SAME
+        // Drop the cached adapter so a subsequent launch/attach on the SAME
         // connection builds a fresh one. Pre-fix the stale adapter kept
         // configDoneSent=true, so configurationDone() no-oped, the --inspect-wait
         // gate never reopened, and the second debuggee hung forever.
@@ -354,7 +354,7 @@ export class BunDapSession extends LoggingDebugSession {
         this.sendResponse(response);
     }
 
-    /** M8 (TCP): exposed so cli.ts can terminate the debuggee on socket close. */
+    /** Exposed so cli.ts can terminate the debuggee on socket close. */
     terminateDebuggee(): void {
         const adapter = this.adapter;
         if (adapter) {
@@ -367,7 +367,7 @@ export class BunDapSession extends LoggingDebugSession {
     }
 
     /**
-     * M8 (stdio): when the transport drops without a disconnect (client killed,
+     * When the transport drops without a disconnect (client killed,
      * stdio closed), the SDK's shutdown exits the process — the launched
      * debuggee would be orphaned. Terminate it first so it does not outlive
      * the lost connection.

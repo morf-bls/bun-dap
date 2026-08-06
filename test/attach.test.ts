@@ -165,8 +165,8 @@ test('e2e: attach disconnect with terminateDebuggee kills the target', async () 
     }
 }, 30_000);
 
-test('e2e: B2b attach-mode terminate request kills the target', async () => {
-    // M6 regression guard: the `terminate` request (not disconnect) in attach
+test('e2e: attach-mode terminate request kills the target', async () => {
+    // Regression guard: the `terminate` request (not disconnect) in attach
     // mode must kill the attached target. adapter-control.test.ts:301 sends
     // `terminate` in launch mode; the test above sends disconnect with
     // terminateDebuggee in attach mode. Neither hits the exact path: terminate

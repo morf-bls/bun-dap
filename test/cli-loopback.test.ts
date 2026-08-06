@@ -2,7 +2,7 @@ import { getAvailablePort } from '../src/util/port';
 import { expect, test } from 'bun:test';
 import { resolve } from 'node:path';
 
-// A3: the CLI must warn on stderr when binding a non-loopback host, and stay
+// The CLI must warn on stderr when binding a non-loopback host, and stay
 // quiet for loopback. Spawn the real CLI (TCP server mode) and read stderr.
 
 /** Spawn `bun run src/cli.ts <port> <host>`, collect stderr until a marker, then kill. */
@@ -42,7 +42,7 @@ async function cliStderr(host: string, wantWarning: boolean): Promise<string> {
     return stderr;
 }
 
-test('A3: non-loopback host warns on stderr about the RCE surface', async () => {
+test('non-loopback host warns on stderr about the RCE surface', async () => {
     const stderr = await cliStderr('0.0.0.0', true);
     expect(stderr, 'warning present').toContain('warning');
     expect(stderr, 'names the host').toContain('0.0.0.0');
@@ -50,7 +50,7 @@ test('A3: non-loopback host warns on stderr about the RCE surface', async () => 
     expect(stderr, 'still listens').toContain('listening');
 }, 10_000);
 
-test('A3: loopback host (127.0.0.1) emits no warning', async () => {
+test('loopback host (127.0.0.1) emits no warning', async () => {
     const stderr = await cliStderr('127.0.0.1', false);
     expect(stderr, 'no warning for loopback').not.toContain('warning');
     expect(stderr, 'still listens').toContain('listening');

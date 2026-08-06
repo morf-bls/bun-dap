@@ -2,11 +2,10 @@ import { castObject, firstBreakpoint, hello, launchReady } from './util/dap-help
 import { connectStdio } from './util/framed-client';
 import { expect, test } from 'bun:test';
 
-// Regression tests added during the 2026-08 code-review pass. Each test
-// reproduces one review issue against the real adapter over stdio and pins
-// the fix.
+// Regression tests against the real adapter over stdio; each reproduces a
+// previously fixed defect and pins the fix.
 
-test('L11: deferred setBreakpoints reports "pending script load" message', async () => {
+test('deferred setBreakpoints reports "pending script load" message', async () => {
     const client = connectStdio();
     try {
         await launchReady(client, hello);

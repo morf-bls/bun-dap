@@ -68,8 +68,6 @@ export interface CallFrame {
     this: RemoteObject;
 }
 
-// ---- Request params / results ----
-
 export interface RuntimeEvaluateParams {
     expression: string;
     returnByValue?: boolean;
@@ -139,8 +137,6 @@ export interface RuntimeEvaluateResult {
     exceptionDetails?: unknown;
 }
 
-// ---- Events ----
-
 export interface ScriptParsedEvent {
     scriptId: string;
     url: string;
@@ -162,8 +158,6 @@ export interface BreakpointResolvedEvent {
     breakpointId: string;
     location: Location;
 }
-
-// ---- Request/result map (drives send() typing) ----
 
 export interface DevRequestMap {
     'Inspector.initialized': { params?: undefined; result: undefined };

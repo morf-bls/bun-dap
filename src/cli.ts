@@ -33,7 +33,6 @@ if (argv.length === 0) {
     // stdio single-session mode (nvim-dap type='executable').
     DebugSession.run(BunDapSession);
 } else {
-    // TCP server mode: `bun run src/cli.ts <port> [host]`.
     const port = Number(argv[0]);
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
         process.stderr.write(
@@ -54,7 +53,7 @@ if (argv.length === 0) {
         const session = new BunDapSession();
         session.setRunAsServer(true); // don't exit the process when this socket closes
         session.start(socket, socket); // ProtocolServer.start binds Content-Length framing
-        // M8: a dropped connection (client killed without disconnect) would orphan
+        // A dropped connection (client killed without disconnect) would orphan
         // the launched debuggee — terminate it before stopping the session.
         socket.on('close', () => {
             try {

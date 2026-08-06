@@ -97,6 +97,30 @@ This is deliberate and load-bearing — AI agents parse `stdout` as pure DAP.
 > use `evaluate` to run arbitrary code in the debuggee. Keep the default
 > `127.0.0.1` binding unless you are on a trusted, isolated network.
 
+## Building and installing
+
+The [quick start](#quick-start) runs the adapter straight from source
+(`src/cli.ts`) — fine for development, not what you want for a stable install.
+For anything else, build the standalone bundle first:
+
+```sh
+bun run build              # bun build src/cli.ts --target=bun → dist/bun-dap
+./dist/bun-dap --help      # verify the artifact runs
+./dist/bun-dap             # stdio DAP server (default)
+./dist/bun-dap 4711        # TCP DAP server on 127.0.0.1:4711
+```
+
+`bun run build` runs `bun build src/cli.ts --target=bun --outfile dist/bun-dap`:
+it bundles the adapter and all its dependencies (`@vscode/debugadapter` framing,
+`ws`, the source-map decoder) into a single self-contained file that keeps the
+`#!/usr/bin/env bun` shebang — so the result runs anywhere Bun is installed,
+with no source checkout and no `bun install`.
+
+Once built, point editor configs at the bundle instead of the source path, e.g.
+`command = '/path/to/dist/bun-dap'` in the nvim-dap adapter config above. A
+published `bun-dap` npm package would ship exactly this artifact behind its
+`bun-dap` bin entry.
+
 ## Usage scenarios
 
 ### Scenario A — Neovim (`nvim-dap`)
@@ -311,7 +335,7 @@ read/write memory, disassemble, `cancel`.
 bun install
 bun test            # full suite (spawns real bun children)
 bun run typecheck   # tsc --noEmit
-bun run build       # standalone binary → dist/bun-dap
+bun run build       # standalone bundle → dist/bun-dap
 ```
 
 Test layout:

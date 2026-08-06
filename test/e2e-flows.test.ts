@@ -3,8 +3,7 @@ import { armBreakpoint, castObject, hello, importsFixture, launchReady, serverFi
 import { connectStdio } from './util/framed-client';
 import { expect, test } from 'bun:test';
 
-// e2e verifications ported from the 2026-08 nvim-dap debugging session's ad
-// hoc probes. They cover the flows the unit-oriented suites did not:
+// e2e verifications covering the flows the unit-oriented suites did not:
 //   - deferred breakpoints in a module WITH imports (the nvim attach
 //     failure: bp verified but never hit — the global brake fires in a
 //     builtin initializer before the entry module parses, and the sync body
@@ -169,7 +168,7 @@ test('e2e: stopOnEntry with a deferred bp — entry stop first, bp stop on conti
 }, 30_000);
 
 test('e2e: attach stepping — next reports step at consecutive lines, variables present at every stop', async () => {
-    // Ported from the session's vars/step probes: after each next the stopped
+    // After each next the stopped
     // reason must be 'step' (nvim only moves the cursor for 'step'), the top
     // frame must advance, and every scope's variables must fetch cleanly
     // (the -32000 regression made them vanish after steps).

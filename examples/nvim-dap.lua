@@ -10,7 +10,7 @@ local dap = require('dap')
 dap.adapters.bun = {
   type = 'executable',
   command = 'bun',
-  args = { 'run', '/path/to/bun-dap/src/cli.ts' },
+  args = { 'run', '/path/to/bun-dap/src/cli.ts' }, -- or path to the built bun-dap bundle, e.g. `bun-dap/dist/bun-dap`
 }
 
 dap.configurations.typescript = {

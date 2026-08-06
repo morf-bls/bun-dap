@@ -74,7 +74,6 @@ export class WebSocketInspector extends EventEmitter {
         });
     }
 
-    /** True once the WebSocket is fully open. */
     get isConnected(): boolean {
         return this.opened;
     }
@@ -145,7 +144,6 @@ export class WebSocketInspector extends EventEmitter {
     }
 }
 
-/** Decode a Bun WebSocket message payload to UTF-8 text. */
 function rawDataToText(data: WebSocket.RawData): string {
     if (typeof data === 'string') return data;
     if (Buffer.isBuffer(data)) return data.toString('utf8');

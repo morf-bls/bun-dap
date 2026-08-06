@@ -10,14 +10,14 @@ function evalCompiled(compiled: string, bindings: Record<string, unknown> = {}):
     return fn(...keys.map((k) => bindings[k]));
 }
 
-test('L24: compileLogMessage handles plain text and single interpolation', () => {
+test('compileLogMessage handles plain text and single interpolation', () => {
     expect(compileLogMessage('plain')).toBe('"plain"');
     expect(evalCompiled(compileLogMessage('plain'))).toBe('plain');
     const compiled = compileLogMessage('hi ${name}');
     expect(evalCompiled(compiled, { name: 'World' })).toBe('hi World');
 });
 
-test('L24: compileLogMessage keeps balanced braces inside ${...} (object literals)', () => {
+test('compileLogMessage keeps balanced braces inside ${...} (object literals)', () => {
     const compiled = compileLogMessage('x=${ {a:1} }');
     // The object literal must be captured whole — the naive `[^}]+` split
     // truncated it at the inner `}`, leaving `{a:1` and a dangling ` }`.
@@ -28,7 +28,7 @@ test('L24: compileLogMessage keeps balanced braces inside ${...} (object literal
     expect(value).toContain('[object Object]');
 });
 
-test('L24: compileLogMessage keeps balanced braces in nested template literals', () => {
+test('compileLogMessage keeps balanced braces in nested template literals', () => {
     const compiled = compileLogMessage('${ `inner ${1+2}` }');
     expect(compiled).toContain('`inner ${1+2}`');
     const value = evalCompiled(compiled) as string;

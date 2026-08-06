@@ -4,7 +4,7 @@ import { type FramedClient, connectTcp } from './util/framed-client';
 import { expect, test } from 'bun:test';
 import { resolve } from 'node:path';
 
-// A1: a launch → disconnect → launch cycle on ONE TCP connection must reuse the
+// A launch → disconnect → launch cycle on ONE TCP connection must reuse the
 // session but build a FRESH adapter. Pre-fix the cached adapter kept
 // configDoneSent=true, so configurationDone() no-oped, the --inspect-wait gate
 // never opened, and the second debuggee hung forever. The TCP server mints a
@@ -38,7 +38,7 @@ async function runOnce(client: FramedClient, label: string): Promise<void> {
     await client.waitForEvent('terminated', 15_000);
 }
 
-test('A1: launch → disconnect → launch on one connection does not hang', async () => {
+test('launch → disconnect → launch on one connection does not hang', async () => {
     const port = await getAvailablePort();
     const server = Bun.spawn(['bun', 'run', 'src/cli.ts', String(port), '127.0.0.1'], {
         cwd: repoRoot,

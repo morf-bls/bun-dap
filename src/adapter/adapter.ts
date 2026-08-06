@@ -21,7 +21,7 @@ import { basename, isAbsolute, resolve } from 'node:path';
 /**
  * Collections with at least this many properties advertise
  * `indexedVariables` so a compliant DAP client pages with start/count. Below
- * it the field is omitted to keep responses clean. The L29 slicing honors
+ * it the field is omitted to keep responses clean. The start/count slicing honors
  * any start/count a client sends regardless, but without advertised counts a
  * well-behaved client never sends them — so this threshold makes the paging
  * reachable rather than dead code.
@@ -116,10 +116,6 @@ interface PlaceholderRecord {
 
 const URL_RE = /ws:\/\/[\w.-]+:\d+\/[^\s]+/;
 
-// ---------------------------------------------------------------------------
-// Adapter
-// ---------------------------------------------------------------------------
-
 /**
  * BunDebugAdapter — a lean DAP⇄JSC engine. Owns the inspector connection, the
  * breakpoint/state stores, and the translation between DAP requests and the
@@ -129,7 +125,6 @@ const URL_RE = /ws:\/\/[\w.-]+:\d+\/[^\s]+/;
 export class BunDebugAdapter {
     host: AdapterHost | null = null;
 
-    // Inspectee state
     private inspector: WebSocketInspector | null = null;
     private launchedChild: ChildProcess | null = null;
     private mode: 'launch' | 'attach' | null = null;
@@ -164,7 +159,6 @@ export class BunDebugAdapter {
     private sources = new Map<string, SourceEntry>();
     private sourcesByScriptId = new Map<string, SourceEntry>();
 
-    // Breakpoints
     private lineBreakpoints = new Map<string, LineBreakpoint>();
     private functionBreakpoints = new Map<string, FunctionBreakpoint>();
     /** jscBreakpointId -> dap bp key (line and function). */
@@ -207,7 +201,6 @@ export class BunDebugAdapter {
     private nextDapBpId = 1;
     private nextBpKey = 1;
 
-    // Pause state
     private currentCallFrames: CallFrame[] = [];
     private currentFrameIds: number[] = [];
     private frameIdToCallFrame = new Map<number, CallFrame>();
@@ -663,7 +656,7 @@ export class BunDebugAdapter {
         this.host?.sendThread('started', 1);
         // A `process` event is only meaningful for launch, where the child's pid
         // is known; in attach mode there is no launched child, so reporting it
-        // would fabricate pid 0 (L27).
+        // would fabricate pid 0.
         if (this.launchedChild?.pid !== undefined) this.host?.sendProcessStarted(this.launchedChild.pid);
     }
 
@@ -961,7 +954,7 @@ export class BunDebugAdapter {
 
         // Remove symbolic breakpoints not in the new set, and ones whose gating
         // changed: a re-sent symbol with a new condition/hitCondition must be
-        // re-armed, not silently kept with the old gating (L26).
+        // re-armed, not silently kept with the old gating.
         for (const [key, bp] of [...this.functionBreakpoints]) {
             const incoming = requested.find((r) => r.name === bp.symbol);
             if (
@@ -1064,12 +1057,12 @@ export class BunDebugAdapter {
         // the pause location does not re-fire once resumed — so its keys join the
         // normal gating below and the stop reports as 'breakpoint'. Otherwise the
         let brakeKeys: string[] = [];
-        // M1: only treat the pause as the entry brake's when JSC reports it as
-        // the brake's own reason (PauseOnNextStatement, or 'other' when stepping
-        // from a bp pause). A Breakpoint/exception/FunctionCall pause arriving
-        // while brakePending is a genuine hit that raced the brake's own pause —
-        // process it normally and KEEP brakePending so the real brake pause still
-        // gets its swallow/stop decision when it arrives.
+        // pause is the brake's own — but only when JSC reports it as such
+        // (PauseOnNextStatement, or 'other' when stepping from a bp pause). A
+        // Breakpoint/exception/FunctionCall pause arriving while brakePending is
+        // a genuine hit that raced the brake's own pause — process it normally
+        // and KEEP brakePending so the real brake pause still gets its
+        // swallow/stop decision when it arrives.
         if (this.brakePending && (params.reason === 'PauseOnNextStatement' || params.reason === 'other')) {
             this.brakePending = false;
             brakeKeys = this.brakeOverlapKeys();
@@ -1094,7 +1087,7 @@ export class BunDebugAdapter {
         // eat the entry stop; fall through so it surfaces as 'entry' (the
         // entry-bp disarm below also runs, once).
         let hitKeysAlias: string[] = [];
-        // M9: JSC reports the hit id variably (data.breakpoints array OR a single
+        // JSC reports the hit id variably (data.breakpoints array OR a single
         // data.breakpointId string). Test EVERY id for placeholder membership,
         // not just data.breakpointId — a placeholder pause reported via the
         // array form was slipping past this block and surfacing as a spurious
@@ -1161,7 +1154,7 @@ export class BunDebugAdapter {
         // Hit-count gating (line + function). Several bps can share one pause
         // (two bps on one statement via the brake overlap, or an alias), so stop
         // when ANY hit bp has reached its count. The old loop resumed on the
-        // FIRST failing bp, silently suppressing the siblings' stop (L25). With
+        // FIRST failing bp, silently suppressing the siblings' stop. With
         // no hit bp at all (pure exception/entry stop) there is nothing to gate.
         const gated = [...hitLineEntries, ...hitFnEntries];
         if (gated.length > 0) {
@@ -1176,7 +1169,7 @@ export class BunDebugAdapter {
             // Condition gating: a falsy condition resumes without stopping — but
             // only when EVERY hit bp fails; an unconditioned sibling passes
             // trivially and its stop must not be eaten by a failing conditioned one
-            // (L25). Evaluate conditioned bps until one passes; short-circuit on
+            // Evaluate conditioned bps until one passes; short-circuit on
             // the first unconditioned bp (it always passes).
             const topFrame = this.currentCallFrames[0];
             let anyConditionPass = false;
@@ -1208,7 +1201,7 @@ export class BunDebugAdapter {
             return;
         }
 
-        // M3: a bp hit — from the brake overlap, a placeholder alias, OR a real
+        // A bp hit — from the brake overlap, a placeholder alias, OR a real
         // armed bp matched via jscToDapKey — always reports 'breakpoint', even
         // when it coincides with the first pause. Otherwise stopOnEntry + a bp at
         // the entry statement surfaces as a spurious 'entry' stop at the bp's line
@@ -1391,7 +1384,7 @@ export class BunDebugAdapter {
      * Release the object groups `evaluate` creates ('repl'/'debugger'/'console')
      * so the DEBUGGEE does not retain evaluated objects across pauses: JSC
      * keeps group members alive until releaseObjectGroup, so without this
-     * every evaluate leaks the referenced objects in the target (L28). Called
+     * every evaluate leaks the referenced objects in the target. Called
      * on every resume/step path — the groups are dead weight once running.
      * Fire-and-forget: a failure (e.g. inspector mid-close) must not block the
      * resume. Sent before the resume RPC so JSC releases while still paused.
@@ -1498,7 +1491,7 @@ export class BunDebugAdapter {
         });
         // Advertise indexedVariables on scopes whose property list exceeds the
         // paging threshold, so a compliant DAP client sends start/count and the
-        // L29 slicing becomes reachable (otherwise the client never pages and
+        // start/count slicing becomes reachable (otherwise the client never pages and
         // the whole collection is dumped in one response). The count is free —
         // Runtime.getDisplayableProperties returns the full list each call.
         await Promise.all(
@@ -1545,7 +1538,7 @@ export class BunDebugAdapter {
             generatePreview: true,
         });
         const all = [...(props.properties ?? props.result ?? []), ...(props.internalProperties ?? [])];
-        // DAP paging: honor the client's start/count window (L29) so a huge
+        // DAP paging: honor the client's start/count window so a huge
         // collection is not dumped in one response; slice before formatting so
         // only the requested rows get object refs.
         const start = args.start ?? 0;

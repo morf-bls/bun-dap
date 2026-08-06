@@ -7,10 +7,10 @@ import { tmpdir } from 'node:os';
 import { join, resolve as resolvePath } from 'node:path';
 import { PassThrough } from 'node:stream';
 
-// Unit-style adapter tests for the 2026-08 review pass. These drive the
-// adapter's async internals against a MockInspector deterministically — the
-// only way to reproduce in-flight arm races, brake interleavings, and
-// multi-bp-per-pause gating without flaky real-bun timing.
+// Unit-style adapter tests that drive the adapter's async internals against
+// a MockInspector deterministically — the only way to reproduce in-flight
+// arm races, brake interleavings, and multi-bp-per-pause gating without
+// flaky real-bun timing.
 
 const ABS_PATH = '/src/mod.ts';
 const BP_LINE = 1;
@@ -45,7 +45,7 @@ function makePause(lineNumber: number, reason = 'PauseOnNextStatement', data?: R
     };
 }
 
-test('L24: every logpoint sharing a pause emits its message (not just the first)', async () => {
+test('every logpoint sharing a pause emits its message (not just the first)', async () => {
     const mock = new MockInspector();
     const { host, log } = recordingHost();
     armCounter(mock, 'bp');
@@ -83,7 +83,7 @@ test('L24: every logpoint sharing a pause emits its message (not just the first)
     expect(log.stopped.length, 'logpoints never stop').toBe(0);
 }, 10_000);
 
-test('H1: aliased placeholder consume re-arms the real bp so later passes hit', async () => {
+test('aliased placeholder consume re-arms the real bp so later passes hit', async () => {
     const mock = new MockInspector();
     const { host, log } = recordingHost();
     // setBreakpointByUrl: a line-0 call is the placeholder (id "ph1", no
@@ -131,7 +131,7 @@ test('H1: aliased placeholder consume re-arms the real bp so later passes hit', 
     expect(must(log.stopped[0]).reason).toBe('breakpoint');
 }, 10_000);
 
-test('M2: in-flight arm orphaned by setBreakpoints replacement is removed', async () => {
+test('in-flight arm orphaned by setBreakpoints replacement is removed', async () => {
     const mock = new MockInspector();
     const { host } = recordingHost();
     const removed: string[] = [];
@@ -182,7 +182,7 @@ test('M2: in-flight arm orphaned by setBreakpoints replacement is removed', asyn
     expect(removed, 'orphaned arm bp removed after liveness re-check').toContain('real1');
 }, 10_000);
 
-test('M9: placeholder pause via data.breakpoints is swallowed', async () => {
+test('placeholder pause via data.breakpoints is swallowed', async () => {
     const mock = new MockInspector();
     const { host, log } = recordingHost();
     mock.reply('Debugger.setBreakpointByUrl', { breakpointId: 'ph1', locations: [] });
@@ -206,7 +206,7 @@ test('M9: placeholder pause via data.breakpoints is swallowed', async () => {
     expect(seam.brakePending, 'brakePending untouched').toBe(false);
 }, 10_000);
 
-test('M1: brake does not swallow an exception pause while brakePending', async () => {
+test('brake does not swallow an exception pause while brakePending', async () => {
     const mock = new MockInspector();
     const { host, log } = recordingHost();
     // A real bp at BP_LINE arms so a 'Breakpoint' pause would join gating,
@@ -234,7 +234,7 @@ test('M1: brake does not swallow an exception pause while brakePending', async (
     expect(seam.brakePending, 'brakePending preserved across non-brake pause').toBe(true);
 }, 10_000);
 
-test('M3: bp hit with firstPausePending set reports breakpoint, not entry', async () => {
+test('bp hit with firstPausePending set reports breakpoint, not entry', async () => {
     const mock = new MockInspector();
     const { host, log } = recordingHost();
     // Arm a real bp at BP_LINE: setBreakpointByUrl returns a jsc id we map to
@@ -269,7 +269,7 @@ test('M3: bp hit with firstPausePending set reports breakpoint, not entry', asyn
     expect(seam.firstPausePending, 'firstPausePending still owed').toBe(true);
 }, 10_000);
 
-test('M3: pure entry stop (no bp hit) reports entry and disarms entry bp', async () => {
+test('pure entry stop (no bp hit) reports entry and disarms entry bp', async () => {
     const mock = new MockInspector();
     const { host, log } = recordingHost();
     mock.reply('Debugger.removeBreakpoint', undefined);
@@ -290,7 +290,7 @@ test('M3: pure entry stop (no bp hit) reports entry and disarms entry bp', async
     expect(seam.firstPausePending, 'firstPausePending cleared').toBe(false);
 }, 10_000);
 
-test('M3: aliased entry-bp placeholder reports bp stop, keeps entry bp for entry stop', async () => {
+test('aliased entry-bp placeholder reports bp stop, keeps entry bp for entry stop', async () => {
     const mock = new MockInspector();
     const { host, log } = recordingHost();
     const removed: string[] = [];
@@ -351,7 +351,7 @@ test('M3: aliased entry-bp placeholder reports bp stop, keeps entry bp for entry
     expect(seam.firstPausePending, 'firstPausePending cleared after entry stop').toBe(false);
 }, 10_000);
 
-test('M7: failed launch kills orphaned debuggee and clears launchedChild', async () => {
+test('failed launch kills orphaned debuggee and clears launchedChild', async () => {
     const mock = new MockInspector();
     const { host } = recordingHost();
     const { adapter, seam } = await mountAdapter(mock, host);
@@ -375,7 +375,7 @@ test('M7: failed launch kills orphaned debuggee and clears launchedChild', async
     expect(seam.launchedChild, 'launchedChild cleared after failed launch').toBeNull();
 }, 15_000);
 
-test('L5: onPaused throw is swallowed to diagnostic, not unhandled', async () => {
+test('onPaused throw is swallowed to diagnostic, not unhandled', async () => {
     const mock = new MockInspector();
     const { host } = recordingHost();
     const { seam } = await mountAdapter(mock, host);
@@ -406,7 +406,7 @@ test('L5: onPaused throw is swallowed to diagnostic, not unhandled', async () =>
     expect(captured.some((s) => s.includes('onPaused: boom'))).toBe(true);
 }, 10_000);
 
-test('L9: condition truthiness: nonzero bigint stops, 0n does not', async () => {
+test('condition truthiness: nonzero bigint stops, 0n does not', async () => {
     const mock = new MockInspector();
     const { host, log } = recordingHost();
     armCounter(mock, 'bp');
@@ -438,7 +438,7 @@ test('L9: condition truthiness: nonzero bigint stops, 0n does not', async () => 
     expect(log.stopped.length, '0n condition should not stop').toBe(0);
 }, 10_000);
 
-test('L9: condition truthiness: symbol always stops', async () => {
+test('condition truthiness: symbol always stops', async () => {
     const mock = new MockInspector();
     const { host, log } = recordingHost();
     armCounter(mock, 'bp');
@@ -461,7 +461,7 @@ test('L9: condition truthiness: symbol always stops', async () => {
     expect(log.stopped.length, 'symbol condition should stop').toBe(1);
 }, 10_000);
 
-test('L16: terminateDebuggee accepts IPv6 loopback [::1]', async () => {
+test('terminateDebuggee accepts IPv6 loopback [::1]', async () => {
     const mock = new MockInspector();
     const { host } = recordingHost();
     const { adapter, seam } = await mountAdapter(mock, host);
@@ -487,7 +487,7 @@ test('L16: terminateDebuggee accepts IPv6 loopback [::1]', async () => {
     expect(msg, '').toBe('');
 }, 10_000);
 
-test('L17: evaluate with stale/unknown frameId throws, not global scope', async () => {
+test('evaluate with stale/unknown frameId throws, not global scope', async () => {
     const mock = new MockInspector();
     const { host } = recordingHost();
     armCounter(mock, 'bp');
@@ -518,7 +518,7 @@ test('L17: evaluate with stale/unknown frameId throws, not global scope', async 
     expect(runtimeEvals.length, 'no global-scope Runtime.evaluate for stale frame').toBe(0);
 }, 10_000);
 
-test('L18: next() clears pause state when JSC omits Debugger.resumed', async () => {
+test('next() clears pause state when JSC omits Debugger.resumed', async () => {
     const mock = new MockInspector();
     const { host } = recordingHost();
     armCounter(mock, 'bp');
@@ -543,7 +543,7 @@ test('L18: next() clears pause state when JSC omits Debugger.resumed', async () 
     );
 }, 10_000);
 
-test('L1: stderr scrape emits pre-URL bytes once and keeps same-chunk remainder', async () => {
+test('stderr scrape emits pre-URL bytes once and keeps same-chunk remainder', async () => {
     const mock = new MockInspector();
     const { host, log } = recordingHost();
     const { seam } = await mountAdapter(mock, host);
@@ -568,7 +568,7 @@ test('L1: stderr scrape emits pre-URL bytes once and keeps same-chunk remainder'
     expect(out, 'pre-URL + same-chunk remainder, each byte once').toBe('pre-one pre-two  remainder');
 }, 10_000);
 
-test('L2: stackTrace reports column >= 1 for source-mapped frames', async () => {
+test('stackTrace reports column >= 1 for source-mapped frames', async () => {
     const mock = new MockInspector();
     const { host } = recordingHost();
     armCounter(mock, 'bp');
@@ -608,7 +608,7 @@ test('L2: stackTrace reports column >= 1 for source-mapped frames', async () => 
     // 0 means "unknown" to many clients, who then misplace the cursor).
     expect(must(stackFrames[0]).column, 'source-mapped frame column >= 1').toBeGreaterThanOrEqual(1);
 }, 15_000);
-test('L25: failing condition on one bp does not suppress a sibling stop on the same pause', async () => {
+test('failing condition on one bp does not suppress a sibling stop on the same pause', async () => {
     const mock = new MockInspector();
     const { host, log } = recordingHost();
     armCounter(mock, 'bp');
@@ -635,7 +635,7 @@ test('L25: failing condition on one bp does not suppress a sibling stop on the s
     expect(resumes.length, 'no swallow resume').toBe(0);
 }, 10_000);
 
-test('L25: failing hitCondition on one bp does not suppress a sibling stop on the same pause', async () => {
+test('failing hitCondition on one bp does not suppress a sibling stop on the same pause', async () => {
     const mock = new MockInspector();
     const { host, log } = recordingHost();
     armCounter(mock, 'bp');
@@ -659,7 +659,7 @@ test('L25: failing hitCondition on one bp does not suppress a sibling stop on th
     expect(resumes.length, 'no swallow resume').toBe(0);
 }, 10_000);
 
-test('L26: re-sent function bp with changed condition re-arms instead of being ignored', async () => {
+test('re-sent function bp with changed condition re-arms instead of being ignored', async () => {
     const mock = new MockInspector();
     const { host } = recordingHost();
     let symN = 0;
@@ -684,7 +684,7 @@ test('L26: re-sent function bp with changed condition re-arms instead of being i
     expect(paramsOf(must(removes[0])).symbol).toBe('foo');
 }, 10_000);
 
-test('L27: process event only in launch mode (attach would report pid 0)', async () => {
+test('process event only in launch mode (attach would report pid 0)', async () => {
     const mock = new MockInspector();
     const { host, log } = recordingHost();
     const { adapter, seam } = await mountAdapter(mock, host);
@@ -703,7 +703,7 @@ test('L27: process event only in launch mode (attach would report pid 0)', async
     expect(log2.threads.length, 'attach still reports the thread').toBe(1);
 }, 10_000);
 
-test('L28: resume releases evaluate object groups so the debuggee drops retained objects', async () => {
+test('resume releases evaluate object groups so the debuggee drops retained objects', async () => {
     const mock = new MockInspector();
     const { host } = recordingHost();
     mock.reply('Debugger.resume', undefined);
@@ -723,7 +723,7 @@ test('L28: resume releases evaluate object groups so the debuggee drops retained
     expect(total.length, 'step paths release the groups too').toBe(6);
 }, 10_000);
 
-test('L29: variables honors start/count paging', async () => {
+test('variables honors start/count paging', async () => {
     const mock = new MockInspector();
     const { host } = recordingHost();
     armCounter(mock, 'bp');
@@ -758,11 +758,11 @@ test('L29: variables honors start/count paging', async () => {
     ).toEqual(['p2', 'p3', 'p4']);
 }, 10_000);
 
-// B2a: pins the `isAbsolute` + empty-string internal-frame classification
+// Pins the `isAbsolute` + empty-string internal-frame classification
 // (replaces the old `!startsWith('/')` check that mis-flagged Windows absolute
 // paths). On posix these guard the branch we actually run under; the fix is
 // cross-OS but the observable contract is platform-dependent.
-test('B2a: absolute-posix-path frame is NOT internal', async () => {
+test('absolute-posix-path frame is NOT internal', async () => {
     const mock = new MockInspector();
     const { host } = recordingHost();
     const { adapter } = await mountAdapter(mock, host);
@@ -780,7 +780,7 @@ test('B2a: absolute-posix-path frame is NOT internal', async () => {
     expect(must(stackFrames[0]).name, 'not <internal>').not.toBe('<internal>');
 }, 10_000);
 
-test('B2a: empty/non-absolute path frame IS internal', async () => {
+test('empty/non-absolute path frame IS internal', async () => {
     const mock = new MockInspector();
     const { host } = recordingHost();
     const { adapter } = await mountAdapter(mock, host);
@@ -802,11 +802,11 @@ test('B2a: empty/non-absolute path frame IS internal', async () => {
     expect(must(stackFrames[0]).source, 'no source for internal').toBeUndefined();
 }, 10_000);
 
-// A4: scopes()/variables()/evaluate() must advertise indexedVariables when a
+// scopes()/variables()/evaluate() must advertise indexedVariables when a
 // container exceeds the paging threshold (100), so a compliant DAP client
-// knows to send start/count. Without advertised counts the L29 slicing is
-// dead code — the client has no signal that the collection is large.
-test('A4: scope with >threshold properties advertises indexedVariables', async () => {
+// knows to send start/count. Without advertised counts the start/count
+// slicing is dead code — the client has no signal that the collection is large.
+test('scope with >threshold properties advertises indexedVariables', async () => {
     const mock = new MockInspector();
     const { host } = recordingHost();
     const { adapter } = await mountAdapter(mock, host);
@@ -839,7 +839,7 @@ test('A4: scope with >threshold properties advertises indexedVariables', async (
     ).toEqual(['10', '11', '12', '13', '14']);
 }, 10_000);
 
-test('A4: scope with <=threshold properties does NOT advertise counts', async () => {
+test('scope with <=threshold properties does NOT advertise counts', async () => {
     const mock = new MockInspector();
     const { host } = recordingHost();
     const { adapter } = await mountAdapter(mock, host);
