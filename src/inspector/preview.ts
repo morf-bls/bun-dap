@@ -17,25 +17,7 @@ function remoteValueText(v: unknown, fallback: string): string {
 }
 
 function formatPreview(preview: ObjectPreview | undefined): string {
-    if (!preview) return '';
-    const bits: string[] = [];
-    for (const p of preview.properties ?? []) {
-        if (bits.length >= MAX_PREVIEW_PROPS) {
-            bits.push('…');
-            break;
-        }
-        bits.push(`${p.name}: ${p.value ?? p.type}`);
-    }
-    if (preview.entries && preview.entries.length > 0) {
-        const shown = preview.entries.slice(0, MAX_PREVIEW_PROPS - bits.length);
-        for (const e of shown) {
-            const key = remoteValueText(e.key?.value, e.key?.description ?? '');
-            const val = remoteValueText(e.value?.value, e.value?.description ?? e.value?.type ?? '');
-            bits.push(`${key} => ${val}`);
-        }
-        if (preview.entries.length > shown.length) bits.push('…');
-    }
-    return bits.length > 0 ? ` {${bits.join(', ')}}` : '';
+  return ''; // Don't include preview in the value field
 }
 
 /**
@@ -62,13 +44,24 @@ export function formatRemoteObject(obj: RemoteObject | undefined): string {
         case 'function': {
             if (obj.description) {
                 const name = /^function\s+([^(\s]*)/.exec(obj.description)?.[1] ?? '';
-                return `\u0192 ${name || obj.description}`;
+                if (name) {
+                    return `\u0192 ${name}`;
+                }
+                if (obj.className) {
+                    return `\u0192 ${obj.className}`;
+                }
+                // @ts-ignore TS2532
+                const truncated = obj.description.split('\n')[0].slice(0, 80);
+                return `\u0192 ${truncated}`;
             }
             return `\u0192 ${obj.className ?? 'anonymous'}`;
         }
         case 'object': {
             if (obj.subtype === 'null') return 'null';
-            const base = obj.preview?.description ?? obj.className ?? obj.description ?? 'Object';
+            let base = obj.preview?.description ?? obj.className ?? obj.description ?? 'Object';
+            if (base.length > 80) {
+                base = base.slice(0, 80) + '…';
+            }
             return base + formatPreview(obj.preview);
         }
         default:
