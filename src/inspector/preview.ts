@@ -1,6 +1,6 @@
-import type { ObjectPreview, RemoteObject } from './jsc-types';
+import type { RemoteObject } from './jsc-types';
 
-const MAX_PREVIEW_PROPS = 5;
+//const MAX_PREVIEW_PROPS = 5;
 
 /** Stringify a JSC value field: primitives show themselves, anything else falls back. */
 function remoteValueText(v: unknown, fallback: string): string {
@@ -16,9 +16,6 @@ function remoteValueText(v: unknown, fallback: string): string {
     }
 }
 
-function formatPreview(preview: ObjectPreview | undefined): string {
-  return ''; // Don't include preview in the value field
-}
 
 /**
  * Render a JSC RemoteObject to a readable DAP Variable value string.
@@ -50,7 +47,7 @@ export function formatRemoteObject(obj: RemoteObject | undefined): string {
                 if (obj.className) {
                     return `\u0192 ${obj.className}`;
                 }
-                // @ts-ignore TS2532
+                // @ts-expect-error ignore-TS2532
                 const truncated = obj.description.split('\n')[0].slice(0, 80);
                 return `\u0192 ${truncated}`;
             }
@@ -62,7 +59,7 @@ export function formatRemoteObject(obj: RemoteObject | undefined): string {
             if (base.length > 80) {
                 base = base.slice(0, 80) + '…';
             }
-            return base + formatPreview(obj.preview);
+            return base ;
         }
         default:
             return obj.description ?? remoteValueText(obj.value, obj.type);

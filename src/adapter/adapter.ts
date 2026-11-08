@@ -1543,7 +1543,7 @@ export class BunDebugAdapter {
         // only the requested rows get object refs.
         const start = args.start ?? 0;
         const count = args.count ?? all.length;
-        const page = all.slice(start, start + count);   
+        const page = all.slice(start, start + count);
         const vars: DebugProtocol.Variable[] = page.map((p) => {
             const variable = {
                 name: p.name,
