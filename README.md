@@ -1,5 +1,25 @@
 # bun-dap
 
+This repo is a fork of Przemyslaw Szelinski's bun-dap adapter
+
+Upstream repo https://github.com/szelinskip/bun-dap
+
+## Why this fork?
+
+- This fork includes a fix for object description fallback
+
+- See upstream PR https://github.com/szelinskip/bun-dap/pull/12 for the proposed changes.
+
+## Changes in this fork
+
+- Raw function/class source code was being displayed next to variable names in the OpenIdea debugger UI
+
+## License
+
+- MIT — Original license and copyright retained from upstream.
+
+## Usage
+
 A standalone, IDE-agnostic [Debug Adapter Protocol][dap] (DAP) **server** for [Bun][bun].
 
 bun-dap drives Bun's JavaScriptCore inspector (`--inspect`, `--inspect-wait`,
