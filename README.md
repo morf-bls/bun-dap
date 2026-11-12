@@ -1,24 +1,33 @@
-# bun-dap
+## bun-dap
 
-This repo is a fork of Przemyslaw Szelinski's bun-dap adapter
+> [!NOTE]
+> This repo is a fork of Przemyslaw Szelinski's bun-dap adapter
+> 
+>Why this fork?
+>- This fork includes a fix for object description fallback
+>- Raw function/class source code was being displayed next to variable names in the OpenIdea debugger UI
+>- MIT — Original license and copyright retained from upstream.
 
-Upstream repo https://github.com/szelinskip/bun-dap
 
-## Why this fork?
+### Installing Quick Guide
 
-- This fork includes a fix for object description fallback
+```bash
+git clone https://github.com/morf-bls/bun-dap.git
+cd bun-dap
+bun install
 
-- See upstream PR https://github.com/szelinskip/bun-dap/pull/12 for the proposed changes.
+#OSX Linux
+bun build src/cli.ts --target=bun --outfile ~/.bun/bin/bun-dap
 
-## Changes in this fork
+#Windows needs to be stand alone binary
+#x86-64
+bun build --compile --target=bun-windows-x64 src/cli.ts --outfile ~/.bun/bin/bun-dap.exe
 
-- Raw function/class source code was being displayed next to variable names in the OpenIdea debugger UI
+#arm64
+bun build --compile --target=bun-windows-arm64 src/cli.ts --outfile ~/.bun/bin/bun-dap.exe
+```
 
-## License
-
-- MIT — Original license and copyright retained from upstream.
-
-## Usage
+## Overview
 
 A standalone, IDE-agnostic [Debug Adapter Protocol][dap] (DAP) **server** for [Bun][bun].
 
